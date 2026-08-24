@@ -1783,6 +1783,9 @@ public class FiqStore {
         return new ApiModels.TableSummary(
                 result.getObject("id", UUID.class),
                 result.getString("qualified_name"),
+                executionTarget(result, ""),
+                result.getBoolean("sample"),
+                result.getString("discovery_status"),
                 environmentName(result.getObject("environment_id", UUID.class)),
                 result.getString("catalog_name"),
                 TableAccessMode.valueOf(result.getString("access_mode")),

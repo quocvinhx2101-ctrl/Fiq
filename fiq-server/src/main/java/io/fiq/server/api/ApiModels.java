@@ -48,6 +48,9 @@ public final class ApiModels {
     public record TableSummary(
             UUID id,
             String qualifiedName,
+            ExecutionTarget executionTarget,
+            boolean sample,
+            String discoveryStatus,
             String environment,
             String catalog,
             TableAccessMode accessMode,
