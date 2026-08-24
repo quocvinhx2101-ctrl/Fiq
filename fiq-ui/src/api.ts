@@ -3,12 +3,14 @@ import type {
   AuditEvent,
   Bootstrap,
   Connection,
+  DiscoveryRun,
   HealthView,
   Operation,
   OperationType,
   Overview,
   Page,
   Policy,
+  PolicyRequest,
   TableDetail,
   TableSummary,
 } from './types'
@@ -55,6 +57,10 @@ export const api = {
   health: (id: string) => request<HealthView>(`/api/v1/tables/${id}/health`),
   refreshHealth: (id: string) => request<HealthView>(`/api/v1/tables/${id}/health/refresh`, { method: 'POST' }),
   policies: () => request<Page<Policy>>('/api/v1/policies?limit=200'),
+  createPolicy: (value: PolicyRequest) => request<Policy>('/api/v1/policies', {
+    method: 'POST',
+    body: JSON.stringify(value),
+  }),
   operations: () => request<Page<Operation>>('/api/v1/operations?limit=200'),
   operation: (id: string) => request<Operation>(`/api/v1/operations/${id}`),
   plan: (tableId: string, policyId: string, operationType: OperationType) =>
@@ -75,7 +81,11 @@ export const api = {
   createConnection: (value: Omit<Connection, 'id' | 'enabled' | 'lastTestedAt' | 'lastTestStatus' | 'lastTestMessage'>) =>
     request<Connection>('/api/v1/connections', {
       method: 'POST',
-      body: JSON.stringify({ ...value, options: {} }),
+      body: JSON.stringify({ ...value, options: value.options ?? {} }),
     }),
+  discover: (id: string, rootUri?: string) => request<DiscoveryRun>(`/api/v1/connections/${id}/discover`, {
+    method: 'POST',
+    body: JSON.stringify({ rootUri: rootUri || null, maxDepth: 4, maxTables: 10_000, timeoutSeconds: 1800 }),
+  }),
   audit: () => request<Page<AuditEvent>>('/api/v1/audit?limit=200'),
 }

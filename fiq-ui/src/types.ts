@@ -43,9 +43,16 @@ export type OperationState =
   | 'CANCELLED'
   | 'SKIPPED'
 
+export type ExecutionTarget =
+  | { type: 'PATH'; uri: string }
+  | { type: 'CATALOG'; catalog: string; namespace: string[]; table: string }
+
 export type TableSummary = {
   id: string
   qualifiedName: string
+  executionTarget: ExecutionTarget
+  sample: boolean
+  discoveryStatus: 'ACTIVE' | 'MISSING'
   environment: string
   catalog: string
   accessMode: 'CLASSIC' | 'CATALOG_MANAGED'
@@ -80,6 +87,14 @@ export type HealthView = {
   provenance: string
   completeness: 'COMPLETE' | 'PARTIAL' | 'STALE'
   staleReason: string | null
+  dimensions: Record<string, {
+    completeness: 'COMPLETE' | 'PARTIAL' | 'UNKNOWN' | 'STALE'
+    provenance: string
+    observedAt: string
+    observedVersion: number
+    incompleteReason: string | null
+    facts?: Record<string, unknown>
+  }>
   fileLayout: Record<string, number>
   deletionVectors: Record<string, number>
   transactionLog: Record<string, unknown>
@@ -103,11 +118,49 @@ export type Policy = {
   updatedAt: string
 }
 
+export type PolicyRequest = {
+  name: string
+  description: string
+  enabled: boolean
+  selector: {
+    environmentGlob: string
+    catalogGlob: string
+    namespaceGlob: string
+    tableGlob: string
+    requiredTags: Record<string, string>
+  }
+  cron: string
+  timezone: string
+  maintenanceWindow: { days: string[]; start: string; end: string }
+  operations: OperationType[]
+  operationConfigs: Partial<Record<OperationType, {
+    retentionHours: number
+    zOrderColumns: string[]
+    predicate: string
+    inventoryTable: string
+    automatic: boolean
+    approvalRequired: boolean
+    fileLayoutPolicy: {
+      smallFileThresholdBytes: number
+      minimumSmallFileCount: number
+      minimumSmallFileRatio: number
+      minimumRewriteBytes: number
+      targetFileSizeBytes: number
+      minimumExpectedReductionRatio: number
+    }
+    vacuumPolicy: { minimumCandidateCount: number; minimumReclaimableBytes: number }
+  }>>
+  maxBytesPerRun: number
+  maxConcurrentOperations: number
+  requireApprovalAboveBudget: boolean
+}
+
 export type Operation = {
   id: string
   workspaceId: string
   tableId: string
   tableName: string
+  executionTarget: ExecutionTarget
   policyId: string
   operationType: OperationType
   state: OperationState
@@ -119,7 +172,14 @@ export type Operation = {
   commandPreview: string
   reasons: string[]
   warnings: string[]
+  policyEvaluation: Record<string, unknown>
+  preflightEvidence: Record<string, unknown>
   result: Record<string, unknown>
+  verificationEvidence: Record<string, unknown>
+  steps: Array<Record<string, unknown>>
+  maintenanceApplied: boolean
+  structuredResultUri: string | null
+  structuredResultChecksum: string | null
   errorCode: string | null
   errorMessage: string | null
   plannedAt: string
@@ -137,10 +197,22 @@ export type Connection = {
   engineType: string
   engineUri: string | null
   secretRef: string | null
+  options?: Record<string, string>
   enabled: boolean
   lastTestedAt: string | null
   lastTestStatus: string | null
   lastTestMessage: string | null
+}
+
+export type DiscoveryRun = {
+  id: string
+  connectionId: string
+  state: string
+  rootUri: string | null
+  tablesFound: number
+  tablesMissing: number
+  errorCode: string | null
+  errorMessage: string | null
 }
 
 export type AuditEvent = {
@@ -163,4 +235,3 @@ export type ApiProblem = {
   timestamp: string
   code: string
 }
-

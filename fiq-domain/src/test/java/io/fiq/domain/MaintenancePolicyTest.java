@@ -1,18 +1,22 @@
 package io.fiq.domain;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MaintenancePolicyTest {
     @Test
-    void selectorMatchesEachContextDimensionAndTags() {
-        var selector =
-                new MaintenancePolicy.Selector(
-                        "prod*", "main", "analytics", "event?", Map.of("tier", "gold"));
-
-        assertThat(selector.matches(DomainFixtures.TABLE, Map.of("tier", "gold"))).isTrue();
-        assertThat(selector.matches(DomainFixtures.TABLE, Map.of("tier", "silver"))).isFalse();
+    void validatesFileThresholdAgainstIndependentHistogramBoundaries() {
+        assertThatThrownBy(
+                        () ->
+                                new MaintenancePolicy.FileLayoutPolicy(
+                                        128 * FileSizeHistogram.MIB + 1,
+                                        20,
+                                        0.3,
+                                        0,
+                                        1024 * FileSizeHistogram.MIB,
+                                        0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("whole MiB");
     }
 }

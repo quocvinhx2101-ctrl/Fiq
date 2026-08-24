@@ -57,39 +57,19 @@ public final class DeltaCapabilities {
         }
 
         result.put(OperationType.OPTIMIZE_BINPACK, Capability.supported(false));
+        var deferred = "Operation is not qualified in FIQ Phase 1";
+        result.put(OperationType.OPTIMIZE_ZORDER, Capability.unsupported(deferred));
+        result.put(OperationType.OPTIMIZE_CLUSTERING, Capability.unsupported(deferred));
+        result.put(OperationType.OPTIMIZE_FULL, Capability.unsupported(deferred));
+        result.put(OperationType.REORG_PURGE, Capability.unsupported(deferred));
+        result.put(OperationType.VACUUM_LITE, Capability.unsupported(deferred));
+        result.put(OperationType.VACUUM_INVENTORY, Capability.unsupported(deferred));
         result.put(
-                OperationType.OPTIMIZE_ZORDER,
-                snapshot.isLiquidClustered()
-                        ? Capability.unsupported("Z-order is incompatible with liquid clustering")
+                OperationType.VACUUM_FULL,
+                snapshot.accessMode() == TableAccessMode.CATALOG_MANAGED
+                        ? Capability.unsupported(
+                                "Delta 4.0.1 blocks VACUUM for catalog-managed managed tables")
                         : Capability.supported(false));
-        result.put(
-                OperationType.OPTIMIZE_CLUSTERING,
-                snapshot.isLiquidClustered()
-                        ? Capability.supported(false)
-                        : Capability.unsupported("The table is not liquid clustered"));
-        result.put(
-                OperationType.OPTIMIZE_FULL,
-                snapshot.isLiquidClustered()
-                        ? Capability.supported(true)
-                        : Capability.unsupported("OPTIMIZE FULL requires liquid clustering"));
-        result.put(
-                OperationType.REORG_PURGE,
-                snapshot.hasFeature("deletionVectors")
-                        ? Capability.supported(false)
-                        : Capability.unsupported("The table does not use deletion vectors"));
-
-        for (var vacuum :
-                Set.of(
-                        OperationType.VACUUM_LITE,
-                        OperationType.VACUUM_FULL,
-                        OperationType.VACUUM_INVENTORY)) {
-            result.put(
-                    vacuum,
-                    snapshot.accessMode() == TableAccessMode.CATALOG_MANAGED
-                            ? Capability.unsupported(
-                                    "Delta 4.0.1 blocks VACUUM for catalog-managed managed tables")
-                            : Capability.supported(vacuum == OperationType.VACUUM_INVENTORY));
-        }
         return Map.copyOf(result);
     }
 }

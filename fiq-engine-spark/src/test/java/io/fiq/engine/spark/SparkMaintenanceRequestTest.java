@@ -2,6 +2,7 @@ package io.fiq.engine.spark;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.fiq.domain.CatalogTarget;
 import io.fiq.domain.OperationType;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +17,7 @@ class SparkMaintenanceRequestTest {
                                 new SparkMaintenanceRequest(
                                         UUID.randomUUID(),
                                         OperationType.OPTIMIZE_BINPACK,
-                                        "main.analytics.events",
+                                        new CatalogTarget("main", List.of("analytics"), "events"),
                                         1,
                                         168,
                                         List.of(),
@@ -34,7 +35,8 @@ class SparkMaintenanceRequestTest {
                                 new SparkMaintenanceRequest(
                                         UUID.randomUUID(),
                                         OperationType.OPTIMIZE_BINPACK,
-                                        "main.analytics.events;drop",
+                                        new CatalogTarget(
+                                                "main", List.of("analytics"), "events\nDROP"),
                                         1,
                                         168,
                                         List.of(),
@@ -42,6 +44,6 @@ class SparkMaintenanceRequestTest {
                                         "",
                                         Map.of()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Unsafe SQL identifier");
+                .hasMessageContaining("control characters");
     }
 }

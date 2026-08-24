@@ -44,13 +44,67 @@ public final class LivyExecutionClient implements SparkExecutionClient {
 
     @Override
     public String submit(SparkMaintenanceRequest request) {
+        return submit(
+                mainClass,
+                "fiq-" + request.operationId(),
+                arguments(request),
+                request.sparkConf(),
+                Map.of("spark.fiq.operationId", request.operationId().toString()));
+    }
+
+    @Override
+    public String submitCatalogDiscovery(SparkCatalogDiscoveryRequest request) {
+        return submit(
+                "io.fiq.spark.CatalogDiscoveryJob",
+                "fiq-discovery-" + request.runId(),
+                List.of("--run-id", request.runId().toString(), "--catalog", request.catalog()),
+                request.sparkConf(),
+                Map.of("spark.fiq.discoveryRunId", request.runId().toString()));
+    }
+
+    @Override
+    public String submitAssessment(SparkAssessmentRequest request) {
+        var arguments = new ArrayList<String>();
+        add(arguments, "--assessment-id", request.assessmentId().toString());
+        addTarget(arguments, request.executionTarget());
+        return submit(
+                "io.fiq.spark.AssessmentJob",
+                "fiq-assessment-" + request.assessmentId(),
+                arguments,
+                request.sparkConf(),
+                Map.of("spark.fiq.assessmentId", request.assessmentId().toString()));
+    }
+
+    @Override
+    public String submitVacuumPreflight(SparkVacuumPreflightRequest request) {
+        var arguments = new ArrayList<String>();
+        add(arguments, "--preflight-id", request.preflightId().toString());
+        addTarget(arguments, request.executionTarget());
+        add(arguments, "--expected-version", String.valueOf(request.expectedVersion()));
+        add(arguments, "--retention-hours", String.valueOf(request.retentionHours()));
+        add(arguments, "--result-prefix", request.resultPrefix());
+        add(arguments, "--allow-unsafe-retention", String.valueOf(request.allowUnsafeRetention()));
+        return submit(
+                "io.fiq.spark.VacuumPreflightJob",
+                "fiq-vacuum-preflight-" + request.preflightId(),
+                arguments,
+                request.sparkConf(),
+                Map.of("spark.fiq.preflightId", request.preflightId().toString()));
+    }
+
+    private String submit(
+            String className,
+            String name,
+            List<String> arguments,
+            Map<String, String> requestedConf,
+            Map<String, String> requiredConf) {
         var body = new LinkedHashMap<String, Object>();
         body.put("file", jobJar);
-        body.put("className", mainClass);
-        body.put("name", "fiq-" + request.operationId());
-        body.put("args", arguments(request));
-        var conf = new LinkedHashMap<>(request.sparkConf());
-        conf.put("spark.fiq.operationId", request.operationId().toString());
+        body.put("className", className);
+        body.put("name", name);
+        body.put("args", arguments);
+        var conf = new LinkedHashMap<>(requestedConf);
+        conf.putAll(requiredConf);
         body.put("conf", conf);
         var response = send("POST", "/batches", body);
         var id = response.get("id");
@@ -60,9 +114,13 @@ public final class LivyExecutionClient implements SparkExecutionClient {
 
     @Override
     public SparkJobStatus status(String jobId) {
-        var response = send("GET", "/batches/" + numericJobId(jobId), null);
+        var id = numericJobId(jobId);
+        var response = send("GET", "/batches/" + id, null);
         var state = mapState(String.valueOf(response.getOrDefault("state", "unknown")));
-        var log = stringList(response.get("log"));
+        // The batch resource contains only Livy's short tail. Discovery emits a structured
+        // marker before Spark shutdown, so retrieve the full bounded log through Livy's log API.
+        var logResponse = send("GET", "/batches/" + id + "/log?from=0&size=10000", null);
+        var log = stringList(logResponse.get("log"));
         return new SparkJobStatus(
                 jobId,
                 state,
@@ -123,7 +181,7 @@ public final class LivyExecutionClient implements SparkExecutionClient {
         var args = new ArrayList<String>();
         add(args, "--operation-id", request.operationId().toString());
         add(args, "--operation", request.operationType().name());
-        add(args, "--table", request.qualifiedTable());
+        addTarget(args, request.executionTarget());
         add(args, "--expected-version", String.valueOf(request.expectedVersion()));
         add(args, "--retention-hours", String.valueOf(request.retentionHours()));
         if (!request.zOrderColumns().isEmpty()) {
@@ -131,7 +189,31 @@ public final class LivyExecutionClient implements SparkExecutionClient {
         }
         if (!request.predicate().isBlank()) add(args, "--predicate", request.predicate());
         if (!request.inventoryTable().isBlank()) add(args, "--inventory", request.inventoryTable());
+        if (!request.resultPrefix().isBlank()) add(args, "--result-prefix", request.resultPrefix());
+        if (!request.approvedCandidateHash().isBlank()) {
+            add(args, "--approved-candidate-hash", request.approvedCandidateHash());
+            add(
+                    args,
+                    "--approved-candidate-count",
+                    String.valueOf(request.approvedCandidateCount()));
+        }
+        add(args, "--allow-unsafe-retention", String.valueOf(request.allowUnsafeRetention()));
         return args;
+    }
+
+    private static void addTarget(List<String> args, io.fiq.domain.ExecutionTarget target) {
+        switch (target) {
+            case io.fiq.domain.PathTarget path -> {
+                add(args, "--target-type", "PATH");
+                add(args, "--path", path.uri().toString());
+            }
+            case io.fiq.domain.CatalogTarget catalog -> {
+                add(args, "--target-type", "CATALOG");
+                add(args, "--catalog", catalog.catalog());
+                add(args, "--namespace", String.join(".", catalog.namespace()));
+                add(args, "--table", catalog.table());
+            }
+        }
     }
 
     private static void add(List<String> args, String key, String value) {

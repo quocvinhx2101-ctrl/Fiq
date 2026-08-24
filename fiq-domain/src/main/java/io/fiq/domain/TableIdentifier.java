@@ -11,7 +11,8 @@ public record TableIdentifier(
         String catalog,
         List<String> namespace,
         String name,
-        Optional<String> location) {
+        Optional<String> location,
+        ExecutionTarget executionTarget) {
 
     public TableIdentifier {
         Objects.requireNonNull(workspaceId, "workspaceId");
@@ -24,6 +25,7 @@ public record TableIdentifier(
         }
         name = requireText(name, "name");
         location = location == null ? Optional.empty() : location.filter(value -> !value.isBlank());
+        executionTarget = Objects.requireNonNull(executionTarget, "executionTarget");
     }
 
     public String qualifiedName() {

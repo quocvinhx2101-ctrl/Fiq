@@ -2,7 +2,6 @@ package io.fiq.server.service;
 
 import io.fiq.delta.DeltaKernelInspector;
 import io.fiq.domain.Role;
-import io.fiq.engine.spark.SparkExecutionClient;
 import io.fiq.server.api.ApiModels;
 import io.fiq.server.persistence.FiqStore;
 import io.fiq.server.security.AccessControl;
@@ -16,7 +15,7 @@ import java.util.UUID;
 public class ConnectionService {
     @Inject FiqStore store;
     @Inject AccessControl access;
-    @Inject SparkExecutionClient spark;
+    @Inject SparkClientProvider sparkClients;
 
     private final DeltaKernelInspector kernel = new DeltaKernelInspector();
 
@@ -24,7 +23,7 @@ public class ConnectionService {
         access.require(Role.ADMIN);
         var connection = store.connection(workspaceId, connectionId);
         var capabilities = new LinkedHashMap<String, Object>();
-        var engine = spark.probe();
+        var engine = sparkClients.forEndpoint(connection.engineUri()).probe();
         capabilities.put("livyReachable", engine.reachable());
         capabilities.put("maintenanceCommands", engine.maintenanceCommandsAvailable());
         capabilities.put("engineMessage", engine.message());

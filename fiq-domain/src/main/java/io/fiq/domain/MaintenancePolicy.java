@@ -89,11 +89,82 @@ public record MaintenancePolicy(
             String predicate,
             String inventoryTable,
             boolean automatic,
-            boolean approvalRequired) {
+            boolean approvalRequired,
+            FileLayoutPolicy fileLayoutPolicy,
+            VacuumPolicy vacuumPolicy) {
         public OperationConfig {
             zOrderColumns = List.copyOf(zOrderColumns == null ? List.of() : zOrderColumns);
             predicate = Objects.requireNonNullElse(predicate, "");
             inventoryTable = Objects.requireNonNullElse(inventoryTable, "");
+            fileLayoutPolicy =
+                    Objects.requireNonNullElseGet(
+                            fileLayoutPolicy, FileLayoutPolicy::defaultTemplate);
+            vacuumPolicy =
+                    Objects.requireNonNullElseGet(vacuumPolicy, VacuumPolicy::defaultTemplate);
+            if (retentionHours < 0) {
+                throw new IllegalArgumentException("retentionHours must be non-negative");
+            }
+        }
+
+        public OperationConfig(
+                long retentionHours,
+                List<String> zOrderColumns,
+                String predicate,
+                String inventoryTable,
+                boolean automatic,
+                boolean approvalRequired) {
+            this(
+                    retentionHours,
+                    zOrderColumns,
+                    predicate,
+                    inventoryTable,
+                    automatic,
+                    approvalRequired,
+                    FileLayoutPolicy.defaultTemplate(),
+                    VacuumPolicy.defaultTemplate());
+        }
+    }
+
+    public record FileLayoutPolicy(
+            long smallFileThresholdBytes,
+            long minimumSmallFileCount,
+            double minimumSmallFileRatio,
+            long minimumRewriteBytes,
+            long targetFileSizeBytes,
+            double minimumExpectedReductionRatio) {
+        public FileLayoutPolicy {
+            FileSizeHistogram.validateThreshold(smallFileThresholdBytes);
+            if (minimumSmallFileCount < 0 || minimumRewriteBytes < 0) {
+                throw new IllegalArgumentException(
+                        "file-layout counts and bytes must be non-negative");
+            }
+            if (minimumSmallFileRatio < 0
+                    || minimumSmallFileRatio > 1
+                    || minimumExpectedReductionRatio < 0
+                    || minimumExpectedReductionRatio > 1) {
+                throw new IllegalArgumentException(
+                        "file-layout ratios must be between zero and one");
+            }
+            if (targetFileSizeBytes <= 0) {
+                throw new IllegalArgumentException("targetFileSizeBytes must be positive");
+            }
+        }
+
+        public static FileLayoutPolicy defaultTemplate() {
+            return new FileLayoutPolicy(
+                    128L * FileSizeHistogram.MIB, 20, 0.30, 0, 1024L * FileSizeHistogram.MIB, 0);
+        }
+    }
+
+    public record VacuumPolicy(long minimumCandidateCount, long minimumReclaimableBytes) {
+        public VacuumPolicy {
+            if (minimumCandidateCount < 0 || minimumReclaimableBytes < 0) {
+                throw new IllegalArgumentException("VACUUM thresholds must be non-negative");
+            }
+        }
+
+        public static VacuumPolicy defaultTemplate() {
+            return new VacuumPolicy(1, 0);
         }
     }
 }

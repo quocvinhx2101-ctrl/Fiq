@@ -48,4 +48,21 @@ public class ConnectionsResource {
     public ApiModels.ConnectionTestResult test(@PathParam("connectionId") UUID connectionId) {
         return service.test(workspace.workspaceId(), connectionId);
     }
+
+    @POST
+    @Path("/{connectionId}/discover")
+    public ApiModels.DiscoveryRunView discover(
+            @PathParam("connectionId") UUID connectionId,
+            @Valid ApiModels.DiscoveryRequest request) {
+        return discovery.discover(workspace.workspaceId(), connectionId, request);
+    }
+
+    @GET
+    @Path("/discovery-runs/{runId}")
+    public ApiModels.DiscoveryRunView discoveryRun(@PathParam("runId") UUID runId) {
+        access.require(Role.VIEWER);
+        return store.discoveryRun(workspace.workspaceId(), runId);
+    }
+
+    @Inject io.fiq.server.service.DiscoveryService discovery;
 }

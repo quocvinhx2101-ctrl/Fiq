@@ -7,6 +7,8 @@ import io.fiq.domain.DeltaCapabilities;
 import io.fiq.domain.DeltaTableSnapshot;
 import io.fiq.domain.HealthAssessment;
 import io.fiq.domain.HealthCompleteness;
+import io.fiq.domain.HealthDimension;
+import io.fiq.domain.HealthDimensionMetadata;
 import io.fiq.domain.MaintenancePolicy;
 import io.fiq.domain.OperationPlan;
 import io.fiq.domain.OperationState;
@@ -41,6 +43,8 @@ import javax.sql.DataSource;
 @ApplicationScoped
 public class FiqStore {
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {};
+    private static final TypeReference<Map<String, Map<String, Object>>> NESTED_OBJECT_MAP =
+            new TypeReference<>() {};
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
 
@@ -117,11 +121,13 @@ public class FiqStore {
         var sql =
                 """
                 SELECT t.*,
-                       COALESCE((h.file_layout->>'fileCount')::bigint, 0) file_count,
+                       COALESCE((h.file_layout->>'activeFileCount')::bigint,
+                         (h.file_layout->>'fileCount')::bigint, 0) file_count,
                        COALESCE((h.file_layout->>'totalBytes')::bigint, 0) total_bytes,
                        COALESCE(h.debt_score, 0) debt_score,
                        COALESCE(h.completeness, 'STALE') health_completeness,
-                       COALESCE((SELECT MAX(i.severity) FROM health_issues i WHERE i.assessment_id=h.id), 'HEALTHY') severity
+                       COALESCE((SELECT i.severity FROM health_issues i WHERE i.assessment_id=h.id
+                         ORDER BY i.severity_rank DESC LIMIT 1), 'HEALTHY') severity
                 FROM delta_tables t
                 LEFT JOIN LATERAL (
                     SELECT * FROM health_assessments h0
@@ -184,6 +190,38 @@ public class FiqStore {
         }
     }
 
+    public Map<String, String> tableConnectionOptions(UUID workspaceId, UUID tableId) {
+        return queryOne(
+                """
+                SELECT c.options FROM delta_tables t
+                JOIN connections c ON c.id=t.connection_id
+                WHERE t.workspace_id=? AND t.id=?
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, tableId);
+                },
+                result -> readStringMap(result.getString("options")),
+                "FIQ_TABLE_NOT_FOUND",
+                "Delta table was not found");
+    }
+
+    public ApiModels.ConnectionView tableConnection(UUID workspaceId, UUID tableId) {
+        return queryOne(
+                """
+                SELECT c.* FROM delta_tables t
+                JOIN connections c ON c.id=t.connection_id
+                WHERE t.workspace_id=? AND t.id=?
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, tableId);
+                },
+                this::connectionView,
+                "FIQ_TABLE_NOT_FOUND",
+                "Delta table was not found");
+    }
+
     public Map<String, String> loadTableTags(UUID workspaceId, UUID tableId) {
         return queryOne(
                 "SELECT tags FROM delta_tables WHERE workspace_id=? AND id=?",
@@ -196,10 +234,28 @@ public class FiqStore {
                 "Delta table was not found");
     }
 
+    public boolean tableSample(UUID workspaceId, UUID tableId) {
+        return queryOne(
+                "SELECT sample FROM delta_tables WHERE workspace_id=? AND id=?",
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, tableId);
+                },
+                result -> result.getBoolean(1),
+                "FIQ_TABLE_NOT_FOUND",
+                "Delta table was not found");
+    }
+
     public ApiModels.HealthView latestHealthView(UUID workspaceId, UUID tableId) {
         var sql =
                 """
                 SELECT h.*,
+                  COALESCE((SELECT jsonb_object_agg(d.dimension, jsonb_build_object(
+                    'dimension', d.dimension, 'completeness', d.completeness,
+                    'provenance', d.provenance, 'observedAt', d.observed_at,
+                    'observedVersion', d.observed_version,
+                    'incompleteReason', d.incomplete_reason, 'facts', d.facts))
+                    FROM assessment_dimensions d WHERE d.assessment_id=h.id), '{}') dimensions,
                   COALESCE((SELECT jsonb_agg(jsonb_build_object(
                     'code', i.code, 'severity', i.severity, 'dimension', i.dimension,
                     'summary', i.summary, 'recommendation', i.recommendation))
@@ -223,6 +279,7 @@ public class FiqStore {
                                 result.getString("provenance"),
                                 HealthCompleteness.valueOf(result.getString("completeness")),
                                 result.getString("stale_reason"),
+                                readNestedObjectMap(result.getString("dimensions")),
                                 readObjectMap(result.getString("file_layout")),
                                 readObjectMap(result.getString("deletion_vectors")),
                                 readObjectMap(result.getString("transaction_log")),
@@ -238,13 +295,33 @@ public class FiqStore {
     public HealthAssessment loadHealth(UUID workspaceId, UUID tableId, TableIdentifier table) {
         var view = latestHealthView(workspaceId, tableId);
         try {
+            var dimensions =
+                    new EnumMap<HealthDimension, HealthDimensionMetadata>(HealthDimension.class);
+            for (var entry : view.dimensions().entrySet()) {
+                var value = new java.util.LinkedHashMap<>(entry.getValue());
+                value.remove("facts");
+                dimensions.put(
+                        HealthDimension.valueOf(entry.getKey()),
+                        mapper.convertValue(value, HealthDimensionMetadata.class));
+            }
+            if (dimensions.isEmpty()) {
+                for (var dimension : HealthDimension.values()) {
+                    dimensions.put(
+                            dimension,
+                            new HealthDimensionMetadata(
+                                    dimension,
+                                    view.completeness(),
+                                    view.provenance(),
+                                    view.assessedAt(),
+                                    view.observedVersion(),
+                                    Optional.ofNullable(view.staleReason())));
+                }
+            }
             return new HealthAssessment(
                     table,
                     view.observedVersion(),
                     view.assessedAt(),
-                    view.provenance(),
-                    view.completeness(),
-                    Optional.ofNullable(view.staleReason()),
+                    dimensions,
                     mapper.convertValue(view.fileLayout(), HealthAssessment.FileLayout.class),
                     mapper.convertValue(
                             view.deletionVectors(), HealthAssessment.DeletionVectors.class),
@@ -289,11 +366,35 @@ public class FiqStore {
                             INSERT INTO health_issues(assessment_id, code, severity, dimension,
                               summary, recommendation) VALUES (?, ?, ?, ?, ?, ?)
                             """);
+                    var dimension =
+                            connection.prepareStatement(
+                                    """
+                            INSERT INTO assessment_dimensions(assessment_id, dimension,
+                              completeness, provenance, observed_at, observed_version,
+                              incomplete_reason, facts)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                            """);
+                    var fileDistribution =
+                            connection.prepareStatement(
+                                    """
+                            INSERT INTO file_size_distributions(assessment_id, bucket_width_bytes,
+                              bucket_counts, overflow_count, median_value_bytes,
+                              median_error_bound_bytes, median_method)
+                            VALUES (?, ?, ?::jsonb, ?, ?, ?, ?)
+                            """);
+                    var tombstoneDistribution =
+                            connection.prepareStatement(
+                                    """
+                            INSERT INTO tombstone_age_distributions(assessment_id,
+                              bucket_upper_hours, bucket_counts)
+                            VALUES (?, ?::jsonb, ?::jsonb)
+                            """);
                     var table =
                             connection.prepareStatement(
                                     """
                             UPDATE delta_tables SET current_version=?, partition_columns=?::jsonb,
-                              clustering_columns=?::jsonb, refreshed_at=NOW()
+                              clustering_columns=?::jsonb, min_reader_version=?,
+                              min_writer_version=?, table_features=?::jsonb, refreshed_at=NOW()
                             WHERE workspace_id=? AND id=?
                             """)) {
                 assessment.setObject(1, assessmentId);
@@ -315,6 +416,40 @@ public class FiqStore {
                 assessment.setString(14, json(health.protocol()));
                 assessment.setDouble(15, debtScore);
                 assessment.executeUpdate();
+                for (var entry : health.dimensions().entrySet()) {
+                    var metadata = entry.getValue();
+                    dimension.setObject(1, assessmentId);
+                    dimension.setString(2, entry.getKey().name());
+                    dimension.setString(3, metadata.completeness().name());
+                    dimension.setString(4, metadata.provenance());
+                    dimension.setObject(
+                            5,
+                            java.time.OffsetDateTime.ofInstant(
+                                    metadata.observedAt(), java.time.ZoneOffset.UTC));
+                    dimension.setLong(6, metadata.observedVersion());
+                    dimension.setString(7, metadata.incompleteReason().orElse(null));
+                    dimension.setString(8, json(dimensionFacts(health, entry.getKey())));
+                    dimension.addBatch();
+                }
+                dimension.executeBatch();
+                var histogram = health.fileLayout().fileSizeHistogram();
+                var median = health.fileLayout().medianFileBytes();
+                fileDistribution.setObject(1, assessmentId);
+                fileDistribution.setLong(2, histogram.bucketWidthBytes());
+                fileDistribution.setString(3, json(histogram.bucketCounts()));
+                fileDistribution.setLong(4, histogram.overflowCount());
+                fileDistribution.setLong(5, median.valueBytes());
+                fileDistribution.setLong(6, median.errorBoundBytes());
+                fileDistribution.setString(7, median.method());
+                fileDistribution.executeUpdate();
+                if (!health.storageRetention().tombstoneAgeBucketCounts().isEmpty()) {
+                    tombstoneDistribution.setObject(1, assessmentId);
+                    tombstoneDistribution.setString(
+                            2, json(health.storageRetention().tombstoneAgeBucketHours()));
+                    tombstoneDistribution.setString(
+                            3, json(health.storageRetention().tombstoneAgeBucketCounts()));
+                    tombstoneDistribution.executeUpdate();
+                }
                 for (var value : health.issues()) {
                     issue.setObject(1, assessmentId);
                     issue.setString(2, value.code());
@@ -328,8 +463,11 @@ public class FiqStore {
                 table.setLong(1, health.observedVersion());
                 table.setString(2, json(health.clustering().partitionColumns()));
                 table.setString(3, json(health.clustering().clusteringColumns()));
-                table.setObject(4, workspaceId);
-                table.setObject(5, tableId);
+                table.setInt(4, health.protocol().minReaderVersion());
+                table.setInt(5, health.protocol().minWriterVersion());
+                table.setString(6, json(health.protocol().tableFeatures()));
+                table.setObject(7, workspaceId);
+                table.setObject(8, tableId);
                 if (table.executeUpdate() != 1)
                     throw new SQLException("table disappeared during health refresh");
                 connection.commit();
@@ -537,6 +675,105 @@ public class FiqStore {
                 .toList();
     }
 
+    public List<PolicyReference> enabledPolicyReferences() {
+        return queryList(
+                "SELECT workspace_id, id FROM policies WHERE enabled=true ORDER BY workspace_id, id",
+                statement -> {},
+                result ->
+                        new PolicyReference(
+                                result.getObject("workspace_id", UUID.class),
+                                result.getObject("id", UUID.class)));
+    }
+
+    public List<UUID> matchingActiveTables(UUID workspaceId, MaintenancePolicy policy) {
+        return queryList(
+                        """
+                        SELECT id FROM delta_tables
+                        WHERE workspace_id=? AND discovery_status='ACTIVE'
+                        ORDER BY id
+                        """,
+                        statement -> statement.setObject(1, workspaceId),
+                        result -> result.getObject("id", UUID.class))
+                .stream()
+                .filter(
+                        tableId ->
+                                policy.selector()
+                                        .matches(
+                                                loadSnapshot(workspaceId, tableId).table(),
+                                                loadTableTags(workspaceId, tableId)))
+                .toList();
+    }
+
+    public long activePolicyOperationCount(UUID workspaceId, UUID policyId) {
+        return queryOne(
+                """
+                SELECT COUNT(*) count FROM operation_runs
+                WHERE workspace_id=? AND policy_id=?
+                  AND state IN ('QUEUED','RUNNING','CANCELLING')
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, policyId);
+                },
+                result -> result.getLong("count"),
+                "FIQ_POLICY_NOT_FOUND",
+                "Policy was not found");
+    }
+
+    public boolean claimPolicyFire(
+            UUID policyId,
+            UUID tableId,
+            OperationType operation,
+            Instant scheduledTimeUtc,
+            String fireKey,
+            String owner,
+            int leaseSeconds) {
+        var sql =
+                """
+                INSERT INTO policy_schedule_state(policy_id, table_id, operation_type,
+                  scheduled_time_utc, fire_key, state, claim_owner, claim_expires_at)
+                VALUES (?, ?, ?, ?, ?, 'CLAIMED', ?, NOW() + (? * INTERVAL '1 second'))
+                ON CONFLICT (fire_key) DO UPDATE SET state='CLAIMED', claim_owner=EXCLUDED.claim_owner,
+                  claim_expires_at=EXCLUDED.claim_expires_at, updated_at=NOW(), error_message=NULL
+                WHERE policy_schedule_state.state='CLAIMED'
+                  AND policy_schedule_state.claim_expires_at < NOW()
+                RETURNING fire_key
+                """;
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, policyId);
+            statement.setObject(2, tableId);
+            statement.setString(3, operation.name());
+            statement.setObject(
+                    4,
+                    java.time.OffsetDateTime.ofInstant(scheduledTimeUtc, java.time.ZoneOffset.UTC));
+            statement.setString(5, fireKey);
+            statement.setString(6, owner);
+            statement.setInt(7, leaseSeconds);
+            try (var result = statement.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException exception) {
+            throw persistenceFailure(exception);
+        }
+    }
+
+    public void completePolicyFire(
+            String fireKey, String state, UUID operationId, String errorMessage) {
+        execute(
+                """
+                UPDATE policy_schedule_state SET state=?, operation_id=?, error_message=?,
+                  claim_owner=NULL, claim_expires_at=NULL, updated_at=NOW()
+                WHERE fire_key=? AND state='CLAIMED'
+                """,
+                statement -> {
+                    statement.setString(1, state);
+                    statement.setObject(2, operationId);
+                    statement.setString(3, errorMessage);
+                    statement.setString(4, fireKey);
+                });
+    }
+
     private void bindPolicy(
             PreparedStatement statement,
             int offset,
@@ -568,33 +805,99 @@ public class FiqStore {
             OperationPlan plan,
             String idempotencyKey) {
         var initialState =
-                plan.approvalRequired() ? OperationState.AWAITING_APPROVAL : OperationState.PLANNED;
+                plan.executable() && plan.approvalRequired()
+                        ? OperationState.AWAITING_APPROVAL
+                        : OperationState.PLANNED;
         var sql =
                 """
                 INSERT INTO operation_runs(
                   id, workspace_id, table_id, policy_id, operation_type, state,
                   based_on_version, estimated_bytes, command_preview, reasons, warnings,
-                  approval_required, idempotency_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?)
+                  approval_required, idempotency_key, execution_target_snapshot,
+                  planning_evidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?::jsonb, ?::jsonb)
                 ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
                 """;
-        execute(
-                sql,
-                statement -> {
-                    statement.setObject(1, plan.id());
-                    statement.setObject(2, workspaceId);
-                    statement.setObject(3, tableId);
-                    statement.setObject(4, policyId);
-                    statement.setString(5, plan.operationType().name());
-                    statement.setString(6, initialState.name());
-                    statement.setLong(7, plan.basedOnVersion());
-                    statement.setLong(8, plan.estimatedBytes());
-                    statement.setString(9, plan.commandPreview());
-                    statement.setString(10, json(plan.reasons()));
-                    statement.setString(11, json(plan.warnings()));
-                    statement.setBoolean(12, plan.approvalRequired());
-                    statement.setString(13, idempotencyKey);
-                });
+        var inserted =
+                execute(
+                        sql,
+                        statement -> {
+                            statement.setObject(1, plan.id());
+                            statement.setObject(2, workspaceId);
+                            statement.setObject(3, tableId);
+                            statement.setObject(4, policyId);
+                            statement.setString(5, plan.operationType().name());
+                            statement.setString(6, initialState.name());
+                            statement.setLong(7, plan.basedOnVersion());
+                            statement.setLong(8, plan.estimatedBytes());
+                            statement.setString(9, plan.commandPreview());
+                            statement.setString(10, json(plan.reasons()));
+                            statement.setString(11, json(plan.warnings()));
+                            statement.setBoolean(12, plan.approvalRequired());
+                            statement.setString(13, idempotencyKey);
+                            statement.setString(14, json(plan.table().executionTarget()));
+                            statement.setString(15, json(plan.evaluation()));
+                        });
+        if (inserted == 1) {
+            execute(
+                    """
+                    INSERT INTO policy_evaluations(workspace_id, policy_id, table_id,
+                      assessment_id, operation_id, operation_type, decision, observations,
+                      policy_thresholds, conditions, blockers, evaluated_at)
+                    SELECT ?, ?, ?, h.id, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?
+                    FROM health_assessments h
+                    WHERE h.workspace_id=? AND h.table_id=? AND h.observed_version=?
+                    ORDER BY h.assessed_at DESC LIMIT 1
+                    """,
+                    statement -> {
+                        var evaluation = plan.evaluation();
+                        statement.setObject(1, workspaceId);
+                        statement.setObject(2, policyId);
+                        statement.setObject(3, tableId);
+                        statement.setObject(4, plan.id());
+                        statement.setString(5, plan.operationType().name());
+                        statement.setString(6, evaluation.decision().name());
+                        statement.setString(7, json(evaluation.observations()));
+                        statement.setString(8, json(evaluation.policyThresholds()));
+                        statement.setString(9, json(evaluation.conditions()));
+                        statement.setString(10, json(evaluation.blockers()));
+                        statement.setObject(
+                                11,
+                                java.time.OffsetDateTime.ofInstant(
+                                        evaluation.evaluatedAt(), java.time.ZoneOffset.UTC));
+                        statement.setObject(12, workspaceId);
+                        statement.setObject(13, tableId);
+                        statement.setLong(14, plan.basedOnVersion());
+                    });
+            var steps = List.of("ASSESS", "PREFLIGHT", "SUBMIT", "EXECUTE", "VERIFY");
+            for (var index = 0; index < steps.size(); index++) {
+                var stepIndex = index;
+                execute(
+                        """
+                        INSERT INTO operation_steps(operation_id, step_order, name, state,
+                          evidence, started_at, completed_at)
+                        VALUES (?, ?, ?, ?, ?::jsonb,
+                          CASE WHEN ?='SUCCEEDED' THEN NOW() END,
+                          CASE WHEN ?='SUCCEEDED' THEN NOW() END)
+                        """,
+                        statement -> {
+                            var state = stepIndex < 2 ? "SUCCEEDED" : "PENDING";
+                            var evidence =
+                                    stepIndex == 0
+                                            ? Map.of("observedVersion", plan.basedOnVersion())
+                                            : stepIndex == 1
+                                                    ? plan.evaluation().observations()
+                                                    : Map.of();
+                            statement.setObject(1, plan.id());
+                            statement.setInt(2, stepIndex);
+                            statement.setString(3, steps.get(stepIndex));
+                            statement.setString(4, state);
+                            statement.setString(5, json(evidence));
+                            statement.setString(6, state);
+                            statement.setString(7, state);
+                        });
+            }
+        }
         return operationByIdempotencyKey(workspaceId, idempotencyKey);
     }
 
@@ -605,6 +908,71 @@ public class FiqStore {
                     statement.setObject(1, workspaceId);
                     statement.setObject(2, operationId);
                 });
+    }
+
+    public Optional<ApiModels.OperationView> findOperationByIdempotencyKey(
+            UUID workspaceId, String key) {
+        return queryList(
+                        operationSelect() + " WHERE o.workspace_id=? AND o.idempotency_key=?",
+                        statement -> {
+                            statement.setObject(1, workspaceId);
+                            statement.setString(2, key);
+                        },
+                        this::operationView)
+                .stream()
+                .findFirst();
+    }
+
+    public void attachPreflight(
+            UUID workspaceId, UUID operationId, Map<String, Object> evidence, String evidenceHash) {
+        var updated =
+                execute(
+                        """
+                        UPDATE operation_runs SET preflight_evidence=?::jsonb,
+                          approval_evidence_hash=?, updated_at=NOW()
+                        WHERE workspace_id=? AND id=? AND state IN ('PLANNED','AWAITING_APPROVAL')
+                        """,
+                        statement -> {
+                            statement.setString(1, json(evidence));
+                            statement.setString(2, evidenceHash);
+                            statement.setObject(3, workspaceId);
+                            statement.setObject(4, operationId);
+                        });
+        if (updated != 1) {
+            throw new ApiException(
+                    Response.Status.CONFLICT,
+                    "FIQ_OPERATION_CHANGED",
+                    "Operation changed before preflight evidence was attached");
+        }
+    }
+
+    public void updateOperationStep(
+            UUID workspaceId,
+            UUID operationId,
+            String name,
+            String state,
+            Map<String, Object> evidence) {
+        var updated =
+                execute(
+                        """
+                        UPDATE operation_steps s SET state=?, evidence=?::jsonb,
+                          started_at=CASE WHEN ?='RUNNING' THEN COALESCE(s.started_at, NOW())
+                            ELSE s.started_at END,
+                          completed_at=CASE WHEN ? IN ('SUCCEEDED','FAILED','CANCELLED')
+                            THEN NOW() ELSE s.completed_at END
+                        FROM operation_runs o
+                        WHERE s.operation_id=o.id AND o.workspace_id=? AND o.id=? AND s.name=?
+                        """,
+                        statement -> {
+                            statement.setString(1, state);
+                            statement.setString(2, json(evidence));
+                            statement.setString(3, state);
+                            statement.setString(4, state);
+                            statement.setObject(5, workspaceId);
+                            statement.setObject(6, operationId);
+                            statement.setString(7, name);
+                        });
+        if (updated != 1) throw new IllegalStateException("Operation step was not found: " + name);
     }
 
     public ApiModels.Page<ApiModels.OperationView> listOperations(UUID workspaceId, int limit) {
@@ -701,6 +1069,51 @@ public class FiqStore {
         return operation(workspaceId, operationId);
     }
 
+    public ApiModels.OperationView completeVerified(
+            UUID workspaceId,
+            UUID operationId,
+            OperationState target,
+            Map<String, Object> result,
+            Map<String, Object> verification,
+            boolean maintenanceApplied,
+            String resultUri,
+            String checksum,
+            String errorCode,
+            String errorMessage) {
+        if (!OperationState.RUNNING.canTransitionTo(target) || !target.isTerminal()) {
+            throw new IllegalArgumentException("Target must be a terminal RUNNING transition");
+        }
+        var updated =
+                execute(
+                        """
+                        UPDATE operation_runs SET state=?, result=?::jsonb,
+                          verification_evidence=?::jsonb, maintenance_applied=?,
+                          structured_result_uri=?, structured_result_checksum=?, error_code=?,
+                          error_message=?, completed_at=NOW(), lease_owner=NULL,
+                          lease_expires_at=NULL, updated_at=NOW()
+                        WHERE workspace_id=? AND id=? AND state='RUNNING'
+                        """,
+                        statement -> {
+                            statement.setString(1, target.name());
+                            statement.setString(2, json(result));
+                            statement.setString(3, json(verification));
+                            statement.setBoolean(4, maintenanceApplied);
+                            statement.setString(5, resultUri);
+                            statement.setString(6, checksum);
+                            statement.setString(7, errorCode);
+                            statement.setString(8, errorMessage);
+                            statement.setObject(9, workspaceId);
+                            statement.setObject(10, operationId);
+                        });
+        if (updated != 1) {
+            throw new ApiException(
+                    Response.Status.CONFLICT,
+                    "FIQ_OPERATION_CHANGED",
+                    "Operation state changed concurrently; refresh and retry");
+        }
+        return operation(workspaceId, operationId);
+    }
+
     public ApiModels.OperationView approve(
             UUID workspaceId, UUID operationId, String principal, String decision, String comment) {
         var operation = operation(workspaceId, operationId);
@@ -716,16 +1129,25 @@ public class FiqStore {
             connection.setAutoCommit(false);
             try (var approval =
                             connection.prepareStatement(
-                                    "INSERT INTO approvals(workspace_id, operation_id, decision, principal, comment) VALUES (?, ?, ?, ?, ?)");
+                                    """
+                                    INSERT INTO approvals(workspace_id, operation_id, decision,
+                                      principal, comment, evidence_hash, evidence)
+                                    SELECT workspace_id, id, ?, ?, ?, approval_evidence_hash,
+                                      jsonb_build_object('planning', planning_evidence,
+                                        'preflight', preflight_evidence,
+                                        'executionTarget', execution_target_snapshot,
+                                        'basedOnVersion', based_on_version)
+                                    FROM operation_runs WHERE workspace_id=? AND id=?
+                                    """);
                     var update =
                             connection.prepareStatement(
                                     "UPDATE operation_runs SET state=?, approved_by=?, approved_at=NOW(), updated_at=NOW() "
                                             + "WHERE workspace_id=? AND id=? AND state='AWAITING_APPROVAL'")) {
-                approval.setObject(1, workspaceId);
-                approval.setObject(2, operationId);
-                approval.setString(3, approved ? "APPROVED" : "REJECTED");
-                approval.setString(4, principal);
-                approval.setString(5, comment);
+                approval.setString(1, approved ? "APPROVED" : "REJECTED");
+                approval.setString(2, principal);
+                approval.setString(3, comment);
+                approval.setObject(4, workspaceId);
+                approval.setObject(5, operationId);
                 approval.executeUpdate();
                 update.setString(1, target.name());
                 update.setString(2, principal);
@@ -777,6 +1199,48 @@ public class FiqStore {
         return connection(workspaceId, id);
     }
 
+    public ApiModels.ConnectionView ensureSampleConnection(
+            UUID id,
+            UUID workspaceId,
+            UUID environmentId,
+            String name,
+            String catalogType,
+            String catalogUri,
+            String warehouseUri,
+            String engineUri,
+            Map<String, String> options) {
+        execute(
+                """
+                INSERT INTO connections(id, workspace_id, environment_id, name, catalog_type,
+                  catalog_uri, warehouse_uri, engine_type, engine_uri, options)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'LIVY', ?, ?::jsonb)
+                ON CONFLICT (workspace_id, name) DO UPDATE SET
+                  catalog_type=EXCLUDED.catalog_type, catalog_uri=EXCLUDED.catalog_uri,
+                  warehouse_uri=EXCLUDED.warehouse_uri, engine_uri=EXCLUDED.engine_uri,
+                  options=EXCLUDED.options, enabled=true, updated_at=NOW()
+                """,
+                statement -> {
+                    statement.setObject(1, id);
+                    statement.setObject(2, workspaceId);
+                    statement.setObject(3, environmentId);
+                    statement.setString(4, name);
+                    statement.setString(5, catalogType);
+                    statement.setString(6, catalogUri);
+                    statement.setString(7, warehouseUri);
+                    statement.setString(8, engineUri);
+                    statement.setString(9, json(options));
+                });
+        return queryOne(
+                "SELECT * FROM connections WHERE workspace_id=? AND name=?",
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setString(2, name);
+                },
+                this::connectionView,
+                "FIQ_SAMPLE_CONNECTION_FAILED",
+                "Sample connection was not created");
+    }
+
     public ApiModels.ConnectionView connection(UUID workspaceId, UUID connectionId) {
         return queryOne(
                 "SELECT * FROM connections WHERE workspace_id=? AND id=?",
@@ -787,6 +1251,214 @@ public class FiqStore {
                 this::connectionView,
                 "FIQ_CONNECTION_NOT_FOUND",
                 "Connection was not found");
+    }
+
+    public ApiModels.DiscoveryRunView createDiscoveryRun(
+            UUID workspaceId,
+            UUID connectionId,
+            String rootUri,
+            int maxDepth,
+            int maxTables,
+            int timeoutSeconds) {
+        var id = UUID.randomUUID();
+        execute(
+                """
+                INSERT INTO discovery_runs(
+                  id, workspace_id, connection_id, state, root_uri,
+                  max_depth, max_tables, timeout_seconds)
+                VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?)
+                """,
+                statement -> {
+                    statement.setObject(1, id);
+                    statement.setObject(2, workspaceId);
+                    statement.setObject(3, connectionId);
+                    statement.setString(4, rootUri);
+                    statement.setInt(5, maxDepth);
+                    statement.setInt(6, maxTables);
+                    statement.setInt(7, timeoutSeconds);
+                });
+        return discoveryRun(workspaceId, id);
+    }
+
+    public ApiModels.DiscoveryRunView discoveryRun(UUID workspaceId, UUID runId) {
+        return queryOne(
+                "SELECT * FROM discovery_runs WHERE workspace_id=? AND id=?",
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, runId);
+                },
+                this::discoveryRunView,
+                "FIQ_DISCOVERY_RUN_NOT_FOUND",
+                "Discovery run was not found");
+    }
+
+    public void upsertPathTable(
+            UUID workspaceId,
+            ApiModels.ConnectionView connection,
+            String catalogAlias,
+            String namespace,
+            io.fiq.delta.DeltaPathDiscovery.DiscoveredPathTable discovered,
+            boolean sample) {
+        var target = discovered.target();
+        var metrics = discovered.metrics();
+        var path = target.uri().getPath();
+        var tableName = path.substring(path.lastIndexOf('/') + 1);
+        var targetJson = json(Map.of("type", "PATH", "uri", target.uri().toString()));
+        execute(
+                """
+                INSERT INTO delta_tables(
+                  workspace_id, environment_id, connection_id, catalog_name, namespace_parts,
+                  table_name, qualified_name, location_uri, access_mode, current_version,
+                  min_reader_version, min_writer_version, table_features, partition_columns,
+                  clustering_columns, properties, tags, source_type, execution_target_type,
+                  execution_target, execution_target_fingerprint, display_identity,
+                  discovery_status, sample, last_seen_at)
+                VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, 'CLASSIC', ?, 1, 2, '[]', ?::jsonb,
+                  ?::jsonb, ?::jsonb, ?::jsonb, 'PATH', 'PATH', ?::jsonb,
+                  encode(digest(?::jsonb::text, 'sha256'), 'hex'), ?, 'ACTIVE', ?, NOW())
+                ON CONFLICT (workspace_id, connection_id, execution_target_fingerprint)
+                DO UPDATE SET current_version=EXCLUDED.current_version,
+                  partition_columns=EXCLUDED.partition_columns,
+                  clustering_columns=EXCLUDED.clustering_columns,
+                  properties=EXCLUDED.properties, tags=EXCLUDED.tags,
+                  discovery_status='ACTIVE', sample=EXCLUDED.sample,
+                  last_seen_at=NOW(), missing_since=NULL, refreshed_at=NOW()
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, connection.environmentId());
+                    statement.setObject(3, connection.id());
+                    statement.setString(4, catalogAlias);
+                    statement.setString(5, json(List.of(namespace)));
+                    statement.setString(6, tableName);
+                    statement.setString(7, catalogAlias + "." + namespace + "." + tableName);
+                    statement.setString(8, target.uri().toString());
+                    statement.setLong(9, metrics.version());
+                    statement.setString(10, json(metrics.partitionColumns()));
+                    statement.setString(11, json(metrics.clusteringColumns()));
+                    statement.setString(12, json(sample ? Map.of("fiq.sample", "true") : Map.of()));
+                    statement.setString(13, json(sample ? Map.of("sample", "true") : Map.of()));
+                    statement.setString(14, targetJson);
+                    statement.setString(15, targetJson);
+                    statement.setString(16, target.uri().toString());
+                    statement.setBoolean(17, sample);
+                });
+    }
+
+    public void upsertCatalogTable(
+            UUID workspaceId,
+            ApiModels.ConnectionView connection,
+            String catalog,
+            List<String> namespace,
+            String tableName,
+            String location,
+            long version,
+            int minReaderVersion,
+            int minWriterVersion,
+            List<String> features,
+            List<String> partitionColumns,
+            Map<String, String> properties,
+            boolean sample) {
+        var targetJson =
+                json(
+                        Map.of(
+                                "type", "CATALOG",
+                                "catalog", catalog,
+                                "namespace", namespace,
+                                "table", tableName));
+        var qualified = String.join(".", catalog, String.join(".", namespace), tableName);
+        execute(
+                """
+                INSERT INTO delta_tables(
+                  workspace_id, environment_id, connection_id, catalog_name, namespace_parts,
+                  table_name, qualified_name, location_uri, access_mode, current_version,
+                  min_reader_version, min_writer_version, table_features, partition_columns,
+                  clustering_columns, properties, tags, source_type, execution_target_type,
+                  execution_target, execution_target_fingerprint, display_identity,
+                  discovery_status, sample, last_seen_at)
+                VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, 'CLASSIC', ?, ?, ?, ?::jsonb, ?::jsonb,
+                  '[]', ?::jsonb, ?::jsonb, 'HMS', 'CATALOG', ?::jsonb,
+                  encode(digest(?::jsonb::text, 'sha256'), 'hex'), ?, 'ACTIVE', ?, NOW())
+                ON CONFLICT (workspace_id, connection_id, execution_target_fingerprint)
+                DO UPDATE SET location_uri=EXCLUDED.location_uri,
+                  current_version=EXCLUDED.current_version,
+                  min_reader_version=EXCLUDED.min_reader_version,
+                  min_writer_version=EXCLUDED.min_writer_version,
+                  table_features=EXCLUDED.table_features,
+                  partition_columns=EXCLUDED.partition_columns,
+                  properties=EXCLUDED.properties, tags=EXCLUDED.tags,
+                  discovery_status='ACTIVE', sample=EXCLUDED.sample,
+                  last_seen_at=NOW(), missing_since=NULL, refreshed_at=NOW()
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, connection.environmentId());
+                    statement.setObject(3, connection.id());
+                    statement.setString(4, catalog);
+                    statement.setString(5, json(namespace));
+                    statement.setString(6, tableName);
+                    statement.setString(7, qualified);
+                    statement.setString(8, location);
+                    statement.setLong(9, version);
+                    statement.setInt(10, minReaderVersion);
+                    statement.setInt(11, minWriterVersion);
+                    statement.setString(12, json(features));
+                    statement.setString(13, json(partitionColumns));
+                    statement.setString(14, json(properties));
+                    statement.setString(15, json(sample ? Map.of("sample", "true") : Map.of()));
+                    statement.setString(16, targetJson);
+                    statement.setString(17, targetJson);
+                    statement.setString(18, qualified);
+                    statement.setBoolean(19, sample);
+                });
+    }
+
+    public ApiModels.DiscoveryRunView completeDiscovery(
+            UUID workspaceId, UUID runId, int tablesFound) {
+        var missing =
+                execute(
+                        """
+                        UPDATE delta_tables SET discovery_status='MISSING', missing_since=NOW()
+                        WHERE workspace_id=?
+                          AND connection_id=(SELECT connection_id FROM discovery_runs WHERE id=? AND workspace_id=?)
+                          AND discovery_status='ACTIVE'
+                          AND last_seen_at < (SELECT started_at FROM discovery_runs WHERE id=? AND workspace_id=?)
+                        """,
+                        statement -> {
+                            statement.setObject(1, workspaceId);
+                            statement.setObject(2, runId);
+                            statement.setObject(3, workspaceId);
+                            statement.setObject(4, runId);
+                            statement.setObject(5, workspaceId);
+                        });
+        execute(
+                """
+                UPDATE discovery_runs SET state='SUCCEEDED', tables_found=?, tables_missing=?,
+                  completed_at=NOW() WHERE workspace_id=? AND id=? AND state='RUNNING'
+                """,
+                statement -> {
+                    statement.setInt(1, tablesFound);
+                    statement.setInt(2, missing);
+                    statement.setObject(3, workspaceId);
+                    statement.setObject(4, runId);
+                });
+        return discoveryRun(workspaceId, runId);
+    }
+
+    public ApiModels.DiscoveryRunView failDiscovery(
+            UUID workspaceId, UUID runId, String code, String message) {
+        execute(
+                """
+                UPDATE discovery_runs SET state='FAILED', error_code=?, error_message=?,
+                  completed_at=NOW() WHERE workspace_id=? AND id=? AND state='RUNNING'
+                """,
+                statement -> {
+                    statement.setString(1, code);
+                    statement.setString(2, message);
+                    statement.setObject(3, workspaceId);
+                    statement.setObject(4, runId);
+                });
+        return discoveryRun(workspaceId, runId);
     }
 
     public void recordConnectionTest(
@@ -1061,7 +1733,15 @@ public class FiqStore {
 
     private String operationSelect() {
         return """
-                SELECT o.*, t.qualified_name table_qualified_name
+                SELECT o.*, t.qualified_name table_qualified_name,
+                  o.execution_target_snapshot->>'type' table_target_type,
+                  o.execution_target_snapshot table_execution_target,
+                  o.planning_evidence policy_evaluation,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                    'name', s.name, 'state', s.state, 'evidence', s.evidence,
+                    'startedAt', s.started_at, 'completedAt', s.completed_at)
+                    ORDER BY s.step_order) FROM operation_steps s
+                    WHERE s.operation_id=o.id), '[]') operation_steps
                 FROM operation_runs o JOIN delta_tables t ON t.id=o.table_id
                 """;
     }
@@ -1072,6 +1752,7 @@ public class FiqStore {
                 result.getObject("workspace_id", UUID.class),
                 result.getObject("table_id", UUID.class),
                 result.getString("table_qualified_name"),
+                executionTarget(result, "table_"),
                 result.getObject("policy_id", UUID.class),
                 OperationType.valueOf(result.getString("operation_type")),
                 OperationState.valueOf(result.getString("state")),
@@ -1083,7 +1764,14 @@ public class FiqStore {
                 result.getString("command_preview"),
                 readStringList(result.getString("reasons")),
                 readStringList(result.getString("warnings")),
+                readObjectMap(result.getString("policy_evaluation")),
+                readObjectMap(result.getString("preflight_evidence")),
                 readObjectMap(result.getString("result")),
+                readObjectMap(result.getString("verification_evidence")),
+                readObjectList(result.getString("operation_steps")),
+                result.getBoolean("maintenance_applied"),
+                result.getString("structured_result_uri"),
+                result.getString("structured_result_checksum"),
                 result.getString("error_code"),
                 result.getString("error_message"),
                 instant(result, "planned_at"),
@@ -1095,6 +1783,9 @@ public class FiqStore {
         return new ApiModels.TableSummary(
                 result.getObject("id", UUID.class),
                 result.getString("qualified_name"),
+                executionTarget(result, ""),
+                result.getBoolean("sample"),
+                result.getString("discovery_status"),
                 environmentName(result.getObject("environment_id", UUID.class)),
                 result.getString("catalog_name"),
                 TableAccessMode.valueOf(result.getString("access_mode")),
@@ -1128,7 +1819,8 @@ public class FiqStore {
                         result.getString("catalog_name"),
                         readStringList(result.getString("namespace_parts")),
                         result.getString("table_name"),
-                        Optional.ofNullable(result.getString("location_uri")));
+                        Optional.ofNullable(result.getString("location_uri")),
+                        executionTarget(result, ""));
         return new DeltaTableSnapshot(
                 identifier,
                 TableAccessMode.valueOf(result.getString("access_mode")),
@@ -1144,6 +1836,29 @@ public class FiqStore {
                 result.getBoolean("filesystem_visible_state_current"));
     }
 
+    private io.fiq.domain.ExecutionTarget executionTarget(ResultSet result, String prefix)
+            throws SQLException {
+        var value = readObjectMap(result.getString(prefix + "execution_target"));
+        var type =
+                prefix.isEmpty()
+                        ? result.getString("execution_target_type")
+                        : result.getString(prefix + "target_type");
+        return switch (type) {
+            case "PATH" -> io.fiq.domain.PathTarget.of(String.valueOf(value.get("uri")));
+            case "CATALOG" ->
+                    new io.fiq.domain.CatalogTarget(
+                            String.valueOf(value.get("catalog")),
+                            objectStringList(value.get("namespace")),
+                            String.valueOf(value.get("table")));
+            default -> throw new SQLException("Unknown execution target type: " + type);
+        };
+    }
+
+    private static List<String> objectStringList(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().map(String::valueOf).toList();
+    }
+
     private RowHandle tableRow(UUID workspaceId, UUID tableId) {
         try {
             var connection = dataSource.getConnection();
@@ -1151,11 +1866,13 @@ public class FiqStore {
                     connection.prepareStatement(
                             """
                     SELECT t.*,
-                      COALESCE((h.file_layout->>'fileCount')::bigint, 0) file_count,
+                      COALESCE((h.file_layout->>'activeFileCount')::bigint,
+                        (h.file_layout->>'fileCount')::bigint, 0) file_count,
                       COALESCE((h.file_layout->>'totalBytes')::bigint, 0) total_bytes,
                       COALESCE(h.debt_score, 0) debt_score,
                       COALESCE(h.completeness, 'STALE') health_completeness,
-                      COALESCE((SELECT MAX(i.severity) FROM health_issues i WHERE i.assessment_id=h.id), 'HEALTHY') severity
+                      COALESCE((SELECT i.severity FROM health_issues i WHERE i.assessment_id=h.id
+                        ORDER BY i.severity_rank DESC LIMIT 1), 'HEALTHY') severity
                     FROM delta_tables t
                     LEFT JOIN LATERAL (SELECT * FROM health_assessments h0 WHERE h0.table_id=t.id
                       ORDER BY assessed_at DESC LIMIT 1) h ON true
@@ -1190,10 +1907,28 @@ public class FiqStore {
                 result.getString("engine_type"),
                 result.getString("engine_uri"),
                 result.getString("secret_ref"),
+                readStringMap(result.getString("options")),
                 result.getBoolean("enabled"),
                 instantNullable(result, "last_tested_at"),
                 result.getString("last_test_status"),
                 result.getString("last_test_message"));
+    }
+
+    private ApiModels.DiscoveryRunView discoveryRunView(ResultSet result) throws SQLException {
+        return new ApiModels.DiscoveryRunView(
+                result.getObject("id", UUID.class),
+                result.getObject("connection_id", UUID.class),
+                result.getString("state"),
+                result.getString("root_uri"),
+                result.getInt("max_depth"),
+                result.getInt("max_tables"),
+                result.getInt("timeout_seconds"),
+                result.getInt("tables_found"),
+                result.getInt("tables_missing"),
+                result.getString("error_code"),
+                result.getString("error_message"),
+                instant(result, "started_at"),
+                instantNullable(result, "completed_at"));
     }
 
     private ApiModels.ApiKeyView apiKeyView(ResultSet result) throws SQLException {
@@ -1271,6 +2006,26 @@ public class FiqStore {
         } catch (JsonProcessingException exception) {
             throw invalidJson(exception);
         }
+    }
+
+    private Map<String, Map<String, Object>> readNestedObjectMap(String json) {
+        if (json == null || json.isBlank()) return Map.of();
+        try {
+            return mapper.readValue(json, NESTED_OBJECT_MAP);
+        } catch (JsonProcessingException exception) {
+            throw invalidJson(exception);
+        }
+    }
+
+    private static Object dimensionFacts(HealthAssessment health, HealthDimension dimension) {
+        return switch (dimension) {
+            case FILE_LAYOUT -> health.fileLayout();
+            case DELETION_VECTORS -> health.deletionVectors();
+            case TRANSACTION_LOG -> health.transactionLog();
+            case RETENTION -> health.storageRetention();
+            case CLUSTERING -> health.clustering();
+            case PROTOCOL -> health.protocol();
+        };
     }
 
     private List<Map<String, Object>> readObjectList(String json) {
@@ -1400,4 +2155,6 @@ public class FiqStore {
             connection.close();
         }
     }
+
+    public record PolicyReference(UUID workspaceId, UUID policyId) {}
 }

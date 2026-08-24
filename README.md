@@ -1,7 +1,15 @@
-# FIQ
+# FIQ Phase 1 — Classic Delta Maintenance Core
 
-FIQ is a policy-driven Delta Lake maintenance control plane. It assesses table health,
-plans safe maintenance, routes approval, and executes one auditable Delta operation at a time.
+FIQ discovers Classic Delta tables, measures their maintenance state independently of policy,
+explains policy decisions, safely runs qualified maintenance, and verifies the result.
+
+New to FIQ? Start with the [end-user guide](docs/end-user-guide.md), which covers both the local
+demo and connecting an existing MinIO/Spark/Delta platform.
+
+```text
+DISCOVER → ASSESS FACTS → EVALUATE POLICY → EXPLAIN → PREFLIGHT
+         → OPTIMIZE / VACUUM FULL → VERIFY BEFORE/AFTER
+```
 
 ## Compatibility baseline
 
@@ -10,8 +18,25 @@ plans safe maintenance, routes approval, and executes one auditable Delta operat
 - Delta Lake and Delta Kernel 4.0.1
 - PostgreSQL 16+
 
-FIQ never edits `_delta_log` directly. Classic tables are inspected through Delta Kernel and
-maintained through Spark. Catalog-managed tables are accessed only through their managing catalog.
+The only Phase 1 mutation-qualified runtime is Spark 4.0.1 + Delta Lake 4.0.1. PATH and HMS are
+supported sources. FIQ never edits `_delta_log`; PATH mutation uses `DeltaTable.forPath`, while
+HMS mutation uses `DeltaTable.forName`, with no fallback between them.
+
+## Deployment boundary
+
+FIQ itself consists of only the FIQ server/UI and PostgreSQL. Delta Kernel is embedded in the
+server; it is a library, not another service. Storage, catalog, and execution infrastructure are
+integrations supplied by the user's platform.
+
+```text
+FIQ runtime                  External integrations
+┌──────────────────┐        ┌──────────────────────────────┐
+│ FIQ server + UI  │───────►│ Object storage              │
+│ Delta Kernel     │        │ Hive Metastore              │
+│ PostgreSQL       │        │ Spark 4.0.1 + Delta 4.0.1   │
+└──────────────────┘        │ Livy execution endpoint     │
+                            └──────────────────────────────┘
+```
 
 ## Modules
 
@@ -22,23 +47,74 @@ maintained through Spark. Catalog-managed tables are accessed only through their
 - `fiq-server` — REST API, scheduler, persistence, authentication, and SPA hosting
 - `fiq-ui` — React production interface
 
-## Build
+## Run FIQ
 
 ```bash
-./gradlew ci
-cd fiq-ui && npm ci && npm run build
+make up
 ```
 
-For a local stack, first build the Spark job then launch Compose:
+This starts only `fiq-server` and PostgreSQL. Open <http://localhost:9091>; the empty Connections
+screen is the expected initial state. Add a PATH or HMS connection for the storage, catalog, and
+Spark/Livy already operated by your platform. FIQ does not contact those systems until a
+connection is tested, discovery runs, an assessment needs it, or an operation executes.
+
+Use `make ps`, `make logs`, and `make down` to inspect or stop this minimal runtime.
+
+## Run the local demo
 
 ```bash
-./gradlew :fiq-spark-job:shadowJar
-docker compose up --build
+make demo-up
 ```
 
-See `docs/architecture.md`, `docs/operator-guide.md`, `docs/admin-guide.md`,
-`docs/upgrade-guide.md`, and `docs/phase-status.md` for safety, deployment, and the explicit
-qualification boundary.
+The demo overlay adds MinIO, Hive Metastore, HMS PostgreSQL, Spark/Delta through Livy, and
+idempotent sample generation. These services are evaluation infrastructure, **not FIQ runtime
+dependencies**. The demo automatically creates PATH/HMS connections and discovers its fixtures.
+Open <http://localhost:9091> after `make demo-ps` shows `server` running and `sample-init` exited
+successfully.
+
+In the UI:
+
+1. Open **Connections** to test PATH/HMS access or run discovery.
+2. Open **Tables**, choose a sample table, and refresh its six assessment dimensions.
+3. Create an **OPTIMIZE BINPACK** or **VACUUM FULL** policy under **Policies**.
+4. In the table's **Policies** tab, create a plan and review its target and decision evidence.
+5. Queue or approve it under **Operations**, then inspect verification before/after evidence.
+
+To exercise both PATH/HMS OPTIMIZE and isolated sample VACUUM FULL from the API:
+
+```bash
+make demo-test
+```
+
+The script requires `curl` and `jq`. Zero-hour retention is enabled only for the isolated sample
+VACUUM fixture and still requires approval; it is never a global setting.
+
+## Development checks
+
+```bash
+make build
+make test
+```
+
+Run `make help` for all build, runtime, demo, log, restart, and scoped cleanup commands.
+
+## Qualification boundary
+
+- Supported: bounded PATH discovery, HMS discovery, policy-independent six-dimension assessment,
+  explainable policies, `OPTIMIZE_BINPACK`, and `VACUUM_FULL` with post-run verification.
+- Retained but not Phase 1 mutation-qualified: VACUUM LITE, Z-order, liquid-clustering
+  maintenance, REORG, inventory vacuum, and Glue.
+- Deferred: Unity Catalog/catalog-managed mutation, generic multi-format support, HA/DR, and
+  enterprise integration infrastructure.
+
+This branch is the **Phase 1 Classic Delta Maintenance Core**, not a general production-readiness
+claim. See [`docs/phase-status.md`](docs/phase-status.md) for tested and unresolved boundaries.
+
+See [`docs/architecture.md`](docs/architecture.md),
+[`docs/end-user-guide.md`](docs/end-user-guide.md),
+[`docs/operator-guide.md`](docs/operator-guide.md),
+[`docs/admin-guide.md`](docs/admin-guide.md), and
+[`docs/upgrade-guide.md`](docs/upgrade-guide.md) for safety and deployment details.
 
 Development changes follow the sustainable Git workflow in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 

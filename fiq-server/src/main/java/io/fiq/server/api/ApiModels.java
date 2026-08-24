@@ -1,5 +1,6 @@
 package io.fiq.server.api;
 
+import io.fiq.domain.ExecutionTarget;
 import io.fiq.domain.HealthCompleteness;
 import io.fiq.domain.MaintenancePolicy;
 import io.fiq.domain.OperationState;
@@ -47,6 +48,9 @@ public final class ApiModels {
     public record TableSummary(
             UUID id,
             String qualifiedName,
+            ExecutionTarget executionTarget,
+            boolean sample,
+            String discoveryStatus,
             String environment,
             String catalog,
             TableAccessMode accessMode,
@@ -80,6 +84,7 @@ public final class ApiModels {
             String provenance,
             HealthCompleteness completeness,
             String staleReason,
+            Map<String, Map<String, Object>> dimensions,
             Map<String, Object> fileLayout,
             Map<String, Object> deletionVectors,
             Map<String, Object> transactionLog,
@@ -137,6 +142,7 @@ public final class ApiModels {
             UUID workspaceId,
             UUID tableId,
             String tableName,
+            ExecutionTarget executionTarget,
             UUID policyId,
             OperationType operationType,
             OperationState state,
@@ -148,7 +154,14 @@ public final class ApiModels {
             String commandPreview,
             List<String> reasons,
             List<String> warnings,
+            Map<String, Object> policyEvaluation,
+            Map<String, Object> preflightEvidence,
             Map<String, Object> result,
+            Map<String, Object> verificationEvidence,
+            List<Map<String, Object>> steps,
+            boolean maintenanceApplied,
+            String structuredResultUri,
+            String structuredResultChecksum,
             String errorCode,
             String errorMessage,
             Instant plannedAt,
@@ -167,6 +180,7 @@ public final class ApiModels {
             String engineType,
             String engineUri,
             String secretRef,
+            Map<String, String> options,
             boolean enabled,
             Instant lastTestedAt,
             String lastTestStatus,
@@ -179,9 +193,30 @@ public final class ApiModels {
             String catalogUri,
             String warehouseUri,
             @NotBlank String engineType,
-            String engineUri,
+            @NotBlank String engineUri,
             String secretRef,
             Map<String, String> options) {}
+
+    public record DiscoveryRequest(
+            String rootUri,
+            @Min(0) @Max(32) Integer maxDepth,
+            @Min(1) @Max(100000) Integer maxTables,
+            @Min(1) @Max(86400) Integer timeoutSeconds) {}
+
+    public record DiscoveryRunView(
+            UUID id,
+            UUID connectionId,
+            String state,
+            String rootUri,
+            int maxDepth,
+            int maxTables,
+            int timeoutSeconds,
+            int tablesFound,
+            int tablesMissing,
+            String errorCode,
+            String errorMessage,
+            Instant startedAt,
+            Instant completedAt) {}
 
     public record ConnectionTestResult(
             boolean reachable, String status, String message, Map<String, Object> capabilities) {}
