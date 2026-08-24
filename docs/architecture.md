@@ -1,6 +1,6 @@
 # Architecture
 
-FIQ is an independent Delta Lake maintenance control plane. It borrows control-plane ideas from
+FIQ is an independent Classic Delta maintenance core. It borrows control-plane ideas from
 Floe but has no Floe build or runtime dependency and contains no Iceberg, Trino, Qute, or HTMX
 code. All source is under the `io.fiq` package.
 
@@ -10,24 +10,37 @@ code. All source is under the `io.fiq` package.
 state. PostgreSQL is the source of truth. Claims use `FOR UPDATE SKIP LOCKED`; a partial unique
 index guarantees that only one queued/running/cancelling operation exists for a table.
 
-Classic tables are read by Delta Kernel in `fiq-delta`. Mutations are expressed as typed
+Classic PATH tables are read by Delta Kernel in `fiq-delta`; HMS discovery and log/retention
+evidence use the qualified Spark runtime. Mutations are expressed as typed
 `SparkMaintenanceRequest` values and sent by `fiq-engine-spark` to Livy. The Scala 2.13
-`fiq-spark-job` verifies the planned Delta version, performs a vacuum dry run before apply, and
-uses only supported Delta/Spark SQL or `DeltaTable` APIs. It never writes `_delta_log` files.
+`fiq-spark-job` verifies the planned Delta version and uses only supported Delta/Spark mutation
+APIs. `PathTarget` always resolves through `DeltaTable.forPath`; `CatalogTarget` always resolves
+through `DeltaTable.forName`. It never writes `_delta_log` files.
 
-Catalog-managed tables are fail-closed. They are never routed through Kernel or a path fallback.
-Their catalog-qualified discovery and execution adapter belongs to Phase 2. Unknown table
-features produce read-only capabilities.
+Assessment stores immutable facts for FILE_LAYOUT, DELETION_VECTORS, TRANSACTION_LOG, RETENTION,
+CLUSTERING, and PROTOCOL. Each dimension carries its own completeness, provenance, version,
+timestamp, and incomplete reason. A bounded 1 MiB histogram measures file sizes without loading
+and sorting every active file. Policies query that histogram later; assessment has no small-file
+threshold and does not create maintenance recommendations.
+
+Catalog-managed tables and unknown features are fail-closed/read-only. Glue and Unity Catalog are
+outside the Phase 1 mutation qualification.
 
 ## Operation lifecycle
 
 `PLANNED → AWAITING_APPROVAL → QUEUED → RUNNING → CANCELLING → terminal` is enforced in the
-domain and by compare-and-set database updates. Immediately before submission the scheduler
-refreshes table health. A version change skips the plan and requires reassessment. Livy job IDs,
-command previews, errors, approvals, and post-run assessment events remain auditable.
+domain and by compare-and-set database updates. Durable policy fires evaluate cron, timezone,
+window, selectors, concurrency, capabilities, and current assessment facts idempotently.
+
+The job writes structured `result.json`, then a SHA-256 manifest under the FIQ system prefix.
+FIQ does not use Livy logs as the canonical operation result. Spark command success is only the
+mutation outcome: FIQ marks success after a fresh assessment verifies version/history and the
+expected OPTIMIZE improvement or VACUUM candidate removal. A stale version is `SKIPPED` with
+`FIQ_PLAN_STALE`; a possible mutation followed by failed verification is `FAILED` with
+`maintenanceApplied=true`.
 
 ## Honest completeness
 
-Kernel-only health is marked `PARTIAL` when log coverage, tombstones, or catalog-authoritative
-state is unavailable. The planner may use that assessment for layout and DV work, but blocks
-vacuum decisions that require retention/log completeness. FIQ never upgrades LITE to FULL.
+Incomplete facts remain `PARTIAL`/`UNKNOWN`, never fabricated as zero. The planner requires only
+the dimensions needed for a requested operation. Phase 1 has executors only for OPTIMIZE BINPACK
+and VACUUM FULL; unsupported operations return `NOT_QUALIFIED_IN_PHASE_1`.

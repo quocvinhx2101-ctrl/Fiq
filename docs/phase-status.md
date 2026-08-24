@@ -1,23 +1,62 @@
-# Delivery status
+# FIQ Phase 1 delivery status
 
-## Phase 1
+## Implemented
 
-Implemented foundations include the six-module build, Delta 4.0.1 Kernel inspection, typed
-Spark/Livy execution for all eight operation commands, safety planning, PostgreSQL/Flyway state,
-workspace isolation, OIDC and hashed API-key RBAC, policy CRUD/validation/simulation, connection
-capability tests, approvals, safe retry, idempotency, leased SKIP LOCKED scheduling, SSE, OpenAPI,
-metrics, production SPA, Docker development services, and operational docs.
+- Typed `PathTarget`/`CatalogTarget` contracts persisted from discovery through verification, with
+  tests proving no `forPath`/`forName` fallback.
+- Bounded PATH discovery and Spark/HMS Delta-provider discovery, idempotent upsert, missing-table
+  state, canonical fingerprints, and sample labels.
+- Policy-independent six-dimension assessments with per-dimension completeness/provenance,
+  bounded file-size histogram, real transaction-log/tombstone facts, and UNKNOWN preservation.
+- User-configurable OPTIMIZE/VACUUM policies and deterministic structured decisions; a debt score
+  is UI summary only and is not the planner source of truth.
+- Qualified OPTIMIZE BINPACK and VACUUM FULL execution for Spark 4.0.1 + Delta 4.0.1, version
+  checks, structured result + SHA-256 manifest, explicit steps, and independent verification.
+- VACUUM canonical preflight/approval evidence and pre-mutation revalidation. Zero-hour retention
+  is restricted to isolated sample tables and approval.
+- Durable cron/window/selector policy scheduler with fire idempotency and concurrency controls.
+- Local PostgreSQL/MinIO/HMS/Livy/Spark sample topology and automatic connection/discovery
+  bootstrap with no manual database insertion or setup curl.
+- Minimal UI controls for connection, discovery, six-dimension health, policy creation, planning,
+  approval/execution, and before/after evidence. Playwright covers the core mocked API workflow at
+  390/768/1440 plus dark theme.
 
-Before a production 1.0 claim, the remaining Phase 1 qualification work is the Spark metadata
-assessment that makes log/retention dimensions complete, HMS/Glue/path discovery jobs, guided UI
-forms for policy/connection/API-key management, webhook delivery, full Testcontainers fixture
-coverage, and measured scale/accessibility/security acceptance. Playwright currently covers the
-primary responsive flow and dark theme at 390/768/1440. Controls for unavailable endpoints are
-disabled with an explicit reason; no sample data is shown as real data.
+## Qualification evidence in this checkout
 
-## Phase 2
+The following checks passed on 2026-08-24:
 
-Unity Catalog 0.3.1 authoritative discovery, catalog-managed execution/permissions, quotas,
-provider secret adapters, signed webhooks, traces/dashboards, DR exercises, and the declared Delta
-4.x compatibility matrix remain Phase 2. Catalog-managed tables are fail-closed in the current
-code, including the Delta 4.0.1 managed-table vacuum prohibition.
+- `./gradlew ci :fiq-server:quarkusBuild :fiq-spark-job:shadowJar --no-daemon`: 39 Gradle tasks,
+  including all backend/domain tests, formatting checks, the production Quarkus build, and Spark
+  shadow JAR.
+- UI typecheck, three Vitest cases, production Vite build, and nine Playwright cases across the
+  mobile/tablet/desktop projects.
+- `docker compose config --quiet`, `bash -n scripts/acceptance-core.sh`, and `git diff --check`.
+- A clean isolated Compose project with new PostgreSQL, MinIO, HMS, and Ivy volumes started from
+  `docker compose up --build`. Sample generation, connection bootstrap, PATH discovery, and HMS
+  discovery completed without manual database insertion or setup curl.
+- Real PATH OPTIMIZE used a `PathTarget`, advanced Delta version 1 to 2, and reduced active/small
+  files from 96 to 1.
+- Real HMS OPTIMIZE used a `CatalogTarget`, advanced Delta version 1 to 2, and reduced active/small
+  files from 64 to 1.
+- Real isolated zero-hour VACUUM FULL required approval, preserved a preflight hash for eight
+  candidates (7,541 measured bytes), applied the mutation, and verified zero approved candidates
+  remaining.
+
+The executable acceptance is [`scripts/acceptance-core.sh`](../scripts/acceptance-core.sh). It is
+destructive only to the explicitly marked sample fixtures and must never be pointed at production
+tables.
+
+## Deliberately not Phase 1 mutation-qualified
+
+VACUUM LITE, Z-order, liquid-clustering maintenance, REORG, inventory vacuum, and Glue remain
+visible only for compatibility and return `NOT_QUALIFIED_IN_PHASE_1`. Unity Catalog,
+catalog-managed mutation, generic table formats, HA/DR qualification, enterprise webhook/secret
+frameworks, and 100k-table scale qualification are deferred.
+
+FIQ Phase 1 is not described generally as “production-ready.” Its bounded claim is **Classic
+Delta Maintenance Core** on the exact qualified mutation runtime.
+
+Known limitations remain: first clean startup downloads a large Spark/Hive dependency graph;
+Playwright uses deterministic API fixtures while the separate Compose acceptance exercises the
+real backend; Glue is not implemented; and Phase 1 has not completed broad security, scale,
+accessibility, or multi-runtime compatibility qualification.
