@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -77,6 +78,44 @@ class MaintenancePlannerTest {
                 .contains(
                         "Retention below 168 hours is qualified only for isolated zero-hour sample tables");
         assertThat(plan.warnings()).contains("Retention is below the safe 168-hour default");
+    }
+
+    @Test
+    void isolatedZeroHourSampleVacuumAlwaysRequiresApproval() {
+        var base = DomainFixtures.snapshot(Set.of(), List.of());
+        var sample =
+                new DeltaTableSnapshot(
+                        base.table(),
+                        base.accessMode(),
+                        base.version(),
+                        base.observedAt(),
+                        base.minReaderVersion(),
+                        base.minWriterVersion(),
+                        base.tableFeatures(),
+                        base.partitionColumns(),
+                        base.clusteringColumns(),
+                        Map.of("fiq.sample", "true"),
+                        base.catalogMaintenanceAllowed(),
+                        base.filesystemVisibleStateCurrent());
+        var config = new MaintenancePolicy.OperationConfig(0, List.of(), "", "", true, false);
+
+        var plan =
+                planner.plan(
+                        sample,
+                        DomainFixtures.health(true),
+                        DomainFixtures.policy(OperationType.VACUUM_FULL, config),
+                        OperationType.VACUUM_FULL,
+                        new VacuumPreflightEvidence(
+                                42,
+                                3,
+                                1024L,
+                                "sha256:sample",
+                                0,
+                                Instant.parse("2026-08-24T00:30:00Z")));
+
+        assertThat(plan.executable()).isTrue();
+        assertThat(plan.approvalRequired()).isTrue();
+        assertThat(plan.evaluation().decision()).isEqualTo(PolicyDecision.APPROVAL_REQUIRED);
     }
 
     @Test

@@ -2,12 +2,12 @@ package io.fiq.spark
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.delta.tables.DeltaTable
+import io.fiq.domain.VacuumCandidateIdentity
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
-import java.net.URI
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 
 private[spark] object FiqSparkSupport {
@@ -64,11 +64,12 @@ private[spark] object FiqSparkSupport {
     if (allowUnsafeRetention)
       spark.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
     val rows = spark.sql(s"VACUUM ${target.sql} FULL RETAIN $retentionHours HOURS DRY RUN")
-    val candidates = rows.collect().iterator.map(_.getString(0)).map(canonicalUri).toSeq.distinct.sorted
-    val checksum = sha256(candidates.mkString("\n").getBytes(StandardCharsets.UTF_8))
+    val identity = VacuumCandidateIdentity.fromUris(
+      rows.collect().iterator.map(_.getString(0)).toSeq.asJava)
+    val candidates = identity.canonicalUris().asScala.toSeq
     val sizes = candidates.map(pathSize(spark, _))
     val bytes = if (sizes.forall(_.isDefined)) Some(sizes.flatten.sum) else None
-    CandidateSet(candidates, checksum, bytes)
+    CandidateSet(candidates, identity.sha256(), bytes)
   }
 
   def writeResult(spark: SparkSession, prefix: String, result: Map[String, Any]): WrittenResult = {
@@ -124,8 +125,6 @@ private[spark] object FiqSparkSupport {
     case safeIdentifier() => s"`$value`"
     case _ => throw new IllegalArgumentException(s"Unsafe SQL identifier: $value")
   }
-
-  private def canonicalUri(value: String): String = new URI(value).normalize().toString
 
   private def pathSize(spark: SparkSession, value: String): Option[Long] = try {
     val path = new Path(value)
