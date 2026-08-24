@@ -218,6 +218,7 @@ public class DiscoveryService {
                 .filter(entry -> entry.getKey().startsWith("fs."))
                 .forEach(entry -> options.put(entry.getKey(), entry.getValue()));
         if (!s3Endpoint.isBlank()) {
+            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
             options.put("fs.s3a.endpoint", s3Endpoint);
             options.put("fs.s3a.path.style.access", "true");
             options.put("fs.s3a.connection.ssl.enabled", "false");

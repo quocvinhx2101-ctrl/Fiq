@@ -54,7 +54,7 @@ class MaintenancePlannerTest {
     }
 
     @Test
-    void unsafeRetentionRequiresApprovalAfterRealPreflight() {
+    void unsafeRetentionIsBlockedOutsideAnIsolatedSample() {
         var config = new MaintenancePolicy.OperationConfig(24, List.of(), "", "", true, false);
 
         var plan =
@@ -71,9 +71,11 @@ class MaintenancePlannerTest {
                                 24,
                                 Instant.parse("2026-08-24T00:30:00Z")));
 
-        assertThat(plan.executable()).isTrue();
-        assertThat(plan.approvalRequired()).isTrue();
-        assertThat(plan.evaluation().decision()).isEqualTo(PolicyDecision.APPROVAL_REQUIRED);
+        assertThat(plan.executable()).isFalse();
+        assertThat(plan.evaluation().decision()).isEqualTo(PolicyDecision.BLOCKED);
+        assertThat(plan.reasons())
+                .contains(
+                        "Retention below 168 hours is qualified only for isolated zero-hour sample tables");
         assertThat(plan.warnings()).contains("Retention is below the safe 168-hour default");
     }
 

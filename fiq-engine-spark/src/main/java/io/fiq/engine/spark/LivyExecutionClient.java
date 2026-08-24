@@ -75,6 +75,23 @@ public final class LivyExecutionClient implements SparkExecutionClient {
                 Map.of("spark.fiq.assessmentId", request.assessmentId().toString()));
     }
 
+    @Override
+    public String submitVacuumPreflight(SparkVacuumPreflightRequest request) {
+        var arguments = new ArrayList<String>();
+        add(arguments, "--preflight-id", request.preflightId().toString());
+        addTarget(arguments, request.executionTarget());
+        add(arguments, "--expected-version", String.valueOf(request.expectedVersion()));
+        add(arguments, "--retention-hours", String.valueOf(request.retentionHours()));
+        add(arguments, "--result-prefix", request.resultPrefix());
+        add(arguments, "--allow-unsafe-retention", String.valueOf(request.allowUnsafeRetention()));
+        return submit(
+                "io.fiq.spark.VacuumPreflightJob",
+                "fiq-vacuum-preflight-" + request.preflightId(),
+                arguments,
+                request.sparkConf(),
+                Map.of("spark.fiq.preflightId", request.preflightId().toString()));
+    }
+
     private String submit(
             String className,
             String name,
@@ -168,6 +185,15 @@ public final class LivyExecutionClient implements SparkExecutionClient {
         }
         if (!request.predicate().isBlank()) add(args, "--predicate", request.predicate());
         if (!request.inventoryTable().isBlank()) add(args, "--inventory", request.inventoryTable());
+        if (!request.resultPrefix().isBlank()) add(args, "--result-prefix", request.resultPrefix());
+        if (!request.approvedCandidateHash().isBlank()) {
+            add(args, "--approved-candidate-hash", request.approvedCandidateHash());
+            add(
+                    args,
+                    "--approved-candidate-count",
+                    String.valueOf(request.approvedCandidateCount()));
+        }
+        add(args, "--allow-unsafe-retention", String.valueOf(request.allowUnsafeRetention()));
         return args;
     }
 

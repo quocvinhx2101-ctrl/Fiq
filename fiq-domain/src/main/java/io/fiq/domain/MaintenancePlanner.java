@@ -158,7 +158,17 @@ public final class MaintenancePlanner {
         var approvalRequired = capability.approvalRequired() || config.approvalRequired();
         if (operationType == OperationType.VACUUM_FULL
                 && config.retentionHours() < SAFE_VACUUM_RETENTION_HOURS) {
-            approvalRequired = true;
+            var isolatedZeroHourSample =
+                    config.retentionHours() == 0
+                            && "true".equalsIgnoreCase(snapshot.properties().get("fiq.sample"));
+            if (isolatedZeroHourSample) approvalRequired = true;
+            else {
+                blockers.add(
+                        new PolicyBlocker(
+                                "FIQ_UNSAFE_RETENTION_NOT_QUALIFIED",
+                                HealthDimension.RETENTION,
+                                "Retention below 168 hours is qualified only for isolated zero-hour sample tables"));
+            }
         }
         var estimatedBytes = estimatedBytes(operationType, observations);
         var phaseOneOperation =

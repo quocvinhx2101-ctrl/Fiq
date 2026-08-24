@@ -234,6 +234,18 @@ public class FiqStore {
                 "Delta table was not found");
     }
 
+    public boolean tableSample(UUID workspaceId, UUID tableId) {
+        return queryOne(
+                "SELECT sample FROM delta_tables WHERE workspace_id=? AND id=?",
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, tableId);
+                },
+                result -> result.getBoolean(1),
+                "FIQ_TABLE_NOT_FOUND",
+                "Delta table was not found");
+    }
+
     public ApiModels.HealthView latestHealthView(UUID workspaceId, UUID tableId) {
         var sql =
                 """
@@ -758,6 +770,34 @@ public class FiqStore {
                         statement.setObject(13, tableId);
                         statement.setLong(14, plan.basedOnVersion());
                     });
+            var steps = List.of("ASSESS", "PREFLIGHT", "SUBMIT", "EXECUTE", "VERIFY");
+            for (var index = 0; index < steps.size(); index++) {
+                var stepIndex = index;
+                execute(
+                        """
+                        INSERT INTO operation_steps(operation_id, step_order, name, state,
+                          evidence, started_at, completed_at)
+                        VALUES (?, ?, ?, ?, ?::jsonb,
+                          CASE WHEN ?='SUCCEEDED' THEN NOW() END,
+                          CASE WHEN ?='SUCCEEDED' THEN NOW() END)
+                        """,
+                        statement -> {
+                            var state = stepIndex < 2 ? "SUCCEEDED" : "PENDING";
+                            var evidence =
+                                    stepIndex == 0
+                                            ? Map.of("observedVersion", plan.basedOnVersion())
+                                            : stepIndex == 1
+                                                    ? plan.evaluation().observations()
+                                                    : Map.of();
+                            statement.setObject(1, plan.id());
+                            statement.setInt(2, stepIndex);
+                            statement.setString(3, steps.get(stepIndex));
+                            statement.setString(4, state);
+                            statement.setString(5, json(evidence));
+                            statement.setString(6, state);
+                            statement.setString(7, state);
+                        });
+            }
         }
         return operationByIdempotencyKey(workspaceId, idempotencyKey);
     }
@@ -769,6 +809,58 @@ public class FiqStore {
                     statement.setObject(1, workspaceId);
                     statement.setObject(2, operationId);
                 });
+    }
+
+    public void attachPreflight(
+            UUID workspaceId, UUID operationId, Map<String, Object> evidence, String evidenceHash) {
+        var updated =
+                execute(
+                        """
+                        UPDATE operation_runs SET preflight_evidence=?::jsonb,
+                          approval_evidence_hash=?, updated_at=NOW()
+                        WHERE workspace_id=? AND id=? AND state IN ('PLANNED','AWAITING_APPROVAL')
+                        """,
+                        statement -> {
+                            statement.setString(1, json(evidence));
+                            statement.setString(2, evidenceHash);
+                            statement.setObject(3, workspaceId);
+                            statement.setObject(4, operationId);
+                        });
+        if (updated != 1) {
+            throw new ApiException(
+                    Response.Status.CONFLICT,
+                    "FIQ_OPERATION_CHANGED",
+                    "Operation changed before preflight evidence was attached");
+        }
+    }
+
+    public void updateOperationStep(
+            UUID workspaceId,
+            UUID operationId,
+            String name,
+            String state,
+            Map<String, Object> evidence) {
+        var updated =
+                execute(
+                        """
+                        UPDATE operation_steps s SET state=?, evidence=?::jsonb,
+                          started_at=CASE WHEN ?='RUNNING' THEN COALESCE(started_at, NOW())
+                            ELSE started_at END,
+                          completed_at=CASE WHEN ? IN ('SUCCEEDED','FAILED','CANCELLED')
+                            THEN NOW() ELSE completed_at END
+                        FROM operation_runs o
+                        WHERE s.operation_id=o.id AND o.workspace_id=? AND o.id=? AND s.name=?
+                        """,
+                        statement -> {
+                            statement.setString(1, state);
+                            statement.setString(2, json(evidence));
+                            statement.setString(3, state);
+                            statement.setString(4, state);
+                            statement.setObject(5, workspaceId);
+                            statement.setObject(6, operationId);
+                            statement.setString(7, name);
+                        });
+        if (updated != 1) throw new IllegalStateException("Operation step was not found: " + name);
     }
 
     public ApiModels.Page<ApiModels.OperationView> listOperations(UUID workspaceId, int limit) {
@@ -865,6 +957,51 @@ public class FiqStore {
         return operation(workspaceId, operationId);
     }
 
+    public ApiModels.OperationView completeVerified(
+            UUID workspaceId,
+            UUID operationId,
+            OperationState target,
+            Map<String, Object> result,
+            Map<String, Object> verification,
+            boolean maintenanceApplied,
+            String resultUri,
+            String checksum,
+            String errorCode,
+            String errorMessage) {
+        if (!OperationState.RUNNING.canTransitionTo(target) || !target.isTerminal()) {
+            throw new IllegalArgumentException("Target must be a terminal RUNNING transition");
+        }
+        var updated =
+                execute(
+                        """
+                        UPDATE operation_runs SET state=?, result=?::jsonb,
+                          verification_evidence=?::jsonb, maintenance_applied=?,
+                          structured_result_uri=?, structured_result_checksum=?, error_code=?,
+                          error_message=?, completed_at=NOW(), lease_owner=NULL,
+                          lease_expires_at=NULL, updated_at=NOW()
+                        WHERE workspace_id=? AND id=? AND state='RUNNING'
+                        """,
+                        statement -> {
+                            statement.setString(1, target.name());
+                            statement.setString(2, json(result));
+                            statement.setString(3, json(verification));
+                            statement.setBoolean(4, maintenanceApplied);
+                            statement.setString(5, resultUri);
+                            statement.setString(6, checksum);
+                            statement.setString(7, errorCode);
+                            statement.setString(8, errorMessage);
+                            statement.setObject(9, workspaceId);
+                            statement.setObject(10, operationId);
+                        });
+        if (updated != 1) {
+            throw new ApiException(
+                    Response.Status.CONFLICT,
+                    "FIQ_OPERATION_CHANGED",
+                    "Operation state changed concurrently; refresh and retry");
+        }
+        return operation(workspaceId, operationId);
+    }
+
     public ApiModels.OperationView approve(
             UUID workspaceId, UUID operationId, String principal, String decision, String comment) {
         var operation = operation(workspaceId, operationId);
@@ -880,16 +1017,25 @@ public class FiqStore {
             connection.setAutoCommit(false);
             try (var approval =
                             connection.prepareStatement(
-                                    "INSERT INTO approvals(workspace_id, operation_id, decision, principal, comment) VALUES (?, ?, ?, ?, ?)");
+                                    """
+                                    INSERT INTO approvals(workspace_id, operation_id, decision,
+                                      principal, comment, evidence_hash, evidence)
+                                    SELECT workspace_id, id, ?, ?, ?, approval_evidence_hash,
+                                      jsonb_build_object('planning', planning_evidence,
+                                        'preflight', preflight_evidence,
+                                        'executionTarget', execution_target_snapshot,
+                                        'basedOnVersion', based_on_version)
+                                    FROM operation_runs WHERE workspace_id=? AND id=?
+                                    """);
                     var update =
                             connection.prepareStatement(
                                     "UPDATE operation_runs SET state=?, approved_by=?, approved_at=NOW(), updated_at=NOW() "
                                             + "WHERE workspace_id=? AND id=? AND state='AWAITING_APPROVAL'")) {
-                approval.setObject(1, workspaceId);
-                approval.setObject(2, operationId);
-                approval.setString(3, approved ? "APPROVED" : "REJECTED");
-                approval.setString(4, principal);
-                approval.setString(5, comment);
+                approval.setString(1, approved ? "APPROVED" : "REJECTED");
+                approval.setString(2, principal);
+                approval.setString(3, comment);
+                approval.setObject(4, workspaceId);
+                approval.setObject(5, operationId);
                 approval.executeUpdate();
                 update.setString(1, target.name());
                 update.setString(2, principal);
@@ -1434,9 +1580,14 @@ public class FiqStore {
     private String operationSelect() {
         return """
                 SELECT o.*, t.qualified_name table_qualified_name,
-                  t.execution_target_type table_target_type,
-                  t.execution_target table_execution_target,
-                  o.planning_evidence policy_evaluation
+                  o.execution_target_snapshot->>'type' table_target_type,
+                  o.execution_target_snapshot table_execution_target,
+                  o.planning_evidence policy_evaluation,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                    'name', s.name, 'state', s.state, 'evidence', s.evidence,
+                    'startedAt', s.started_at, 'completedAt', s.completed_at)
+                    ORDER BY s.step_order) FROM operation_steps s
+                    WHERE s.operation_id=o.id), '[]') operation_steps
                 FROM operation_runs o JOIN delta_tables t ON t.id=o.table_id
                 """;
     }
@@ -1460,7 +1611,13 @@ public class FiqStore {
                 readStringList(result.getString("reasons")),
                 readStringList(result.getString("warnings")),
                 readObjectMap(result.getString("policy_evaluation")),
+                readObjectMap(result.getString("preflight_evidence")),
                 readObjectMap(result.getString("result")),
+                readObjectMap(result.getString("verification_evidence")),
+                readObjectList(result.getString("operation_steps")),
+                result.getBoolean("maintenance_applied"),
+                result.getString("structured_result_uri"),
+                result.getString("structured_result_checksum"),
                 result.getString("error_code"),
                 result.getString("error_message"),
                 instant(result, "planned_at"),

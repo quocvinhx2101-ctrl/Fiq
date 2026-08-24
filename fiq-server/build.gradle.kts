@@ -7,6 +7,8 @@ dependencies {
     implementation(project(":fiq-domain"))
     implementation(project(":fiq-delta"))
     implementation(project(":fiq-engine-spark"))
+    implementation(libs.hadoop.common)
+    runtimeOnly(libs.hadoop.aws)
 
     implementation("io.quarkus:quarkus-rest-jackson")
     implementation("io.quarkus:quarkus-rest")
@@ -26,4 +28,3 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.bundles.testing)
 }
-

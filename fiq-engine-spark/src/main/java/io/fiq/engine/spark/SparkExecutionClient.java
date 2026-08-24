@@ -7,6 +7,8 @@ public interface SparkExecutionClient {
 
     String submitAssessment(SparkAssessmentRequest request);
 
+    String submitVacuumPreflight(SparkVacuumPreflightRequest request);
+
     SparkJobStatus status(String jobId);
 
     void cancel(String jobId);
