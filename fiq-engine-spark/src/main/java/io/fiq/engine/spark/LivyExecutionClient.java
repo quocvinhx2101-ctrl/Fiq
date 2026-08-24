@@ -62,6 +62,19 @@ public final class LivyExecutionClient implements SparkExecutionClient {
                 Map.of("spark.fiq.discoveryRunId", request.runId().toString()));
     }
 
+    @Override
+    public String submitAssessment(SparkAssessmentRequest request) {
+        var arguments = new ArrayList<String>();
+        add(arguments, "--assessment-id", request.assessmentId().toString());
+        addTarget(arguments, request.executionTarget());
+        return submit(
+                "io.fiq.spark.AssessmentJob",
+                "fiq-assessment-" + request.assessmentId(),
+                arguments,
+                request.sparkConf(),
+                Map.of("spark.fiq.assessmentId", request.assessmentId().toString()));
+    }
+
     private String submit(
             String className,
             String name,
@@ -147,7 +160,19 @@ public final class LivyExecutionClient implements SparkExecutionClient {
         var args = new ArrayList<String>();
         add(args, "--operation-id", request.operationId().toString());
         add(args, "--operation", request.operationType().name());
-        switch (request.executionTarget()) {
+        addTarget(args, request.executionTarget());
+        add(args, "--expected-version", String.valueOf(request.expectedVersion()));
+        add(args, "--retention-hours", String.valueOf(request.retentionHours()));
+        if (!request.zOrderColumns().isEmpty()) {
+            add(args, "--zorder-columns", String.join(",", request.zOrderColumns()));
+        }
+        if (!request.predicate().isBlank()) add(args, "--predicate", request.predicate());
+        if (!request.inventoryTable().isBlank()) add(args, "--inventory", request.inventoryTable());
+        return args;
+    }
+
+    private static void addTarget(List<String> args, io.fiq.domain.ExecutionTarget target) {
+        switch (target) {
             case io.fiq.domain.PathTarget path -> {
                 add(args, "--target-type", "PATH");
                 add(args, "--path", path.uri().toString());
@@ -159,14 +184,6 @@ public final class LivyExecutionClient implements SparkExecutionClient {
                 add(args, "--table", catalog.table());
             }
         }
-        add(args, "--expected-version", String.valueOf(request.expectedVersion()));
-        add(args, "--retention-hours", String.valueOf(request.retentionHours()));
-        if (!request.zOrderColumns().isEmpty()) {
-            add(args, "--zorder-columns", String.join(",", request.zOrderColumns()));
-        }
-        if (!request.predicate().isBlank()) add(args, "--predicate", request.predicate());
-        if (!request.inventoryTable().isBlank()) add(args, "--inventory", request.inventoryTable());
-        return args;
     }
 
     private static void add(List<String> args, String key, String value) {

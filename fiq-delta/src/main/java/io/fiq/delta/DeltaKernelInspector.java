@@ -10,9 +10,4 @@ public final class DeltaKernelInspector {
     public KernelTableMetrics inspect(String tablePath, Map<String, String> hadoopOptions) {
         return adapter.inspect(tablePath, hadoopOptions);
     }
-
-    public KernelTableMetrics inspect(
-            String tablePath, Map<String, String> hadoopOptions, long smallFileThresholdBytes) {
-        return adapter.inspect(tablePath, hadoopOptions, smallFileThresholdBytes);
-    }
 }

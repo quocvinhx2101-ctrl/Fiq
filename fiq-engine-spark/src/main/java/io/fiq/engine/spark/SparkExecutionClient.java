@@ -5,6 +5,8 @@ public interface SparkExecutionClient {
 
     String submitCatalogDiscovery(SparkCatalogDiscoveryRequest request);
 
+    String submitAssessment(SparkAssessmentRequest request);
+
     SparkJobStatus status(String jobId);
 
     void cancel(String jobId);

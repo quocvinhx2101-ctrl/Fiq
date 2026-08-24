@@ -4,6 +4,8 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -40,32 +42,56 @@ final class DomainFixtures {
     }
 
     static HealthAssessment health(boolean logCoverage) {
+        var assessedAt = Instant.parse("2026-08-24T00:00:00Z");
+        var dimensions =
+                new EnumMap<HealthDimension, HealthDimensionMetadata>(HealthDimension.class);
+        for (var dimension : HealthDimension.values()) {
+            dimensions.put(
+                    dimension,
+                    new HealthDimensionMetadata(
+                            dimension,
+                            HealthCompleteness.COMPLETE,
+                            "test",
+                            assessedAt,
+                            42,
+                            Optional.empty()));
+        }
+        var buckets = new ArrayList<Long>(java.util.Collections.nCopies(1024, 0L));
+        buckets.set(4, 40L);
+        buckets.set(256, 60L);
         return new HealthAssessment(
                 TABLE,
                 42,
-                Instant.parse("2026-08-24T00:00:00Z"),
-                "delta-kernel-4.0.1",
-                HealthCompleteness.COMPLETE,
-                Optional.empty(),
+                assessedAt,
+                dimensions,
                 new HealthAssessment.FileLayout(
                         100,
                         10_000_000_000L,
                         1,
                         500_000_000,
-                        50_000_000,
                         100_000_000,
-                        40,
-                        0.4,
+                        new HealthAssessment.QuantileEstimate(
+                                256 * FileSizeHistogram.MIB, FileSizeHistogram.MIB / 2, "test"),
+                        new FileSizeHistogram(FileSizeHistogram.MIB, buckets, 0),
                         3,
                         1.2),
-                new HealthAssessment.DeletionVectors(10, 1_000_000, 1000, 0.1),
+                new HealthAssessment.DeletionVectors(10, 1_000_000, 1000L, 0.1),
                 new HealthAssessment.TransactionLog(
-                        42, 2, Optional.empty(), "V2", 10, 1000, logCoverage, 0),
-                new HealthAssessment.StorageRetention(20, 2_000_000_000L, 168),
+                        42, 40L, assessedAt, "V2", 2L, 10L, 1000L, logCoverage),
+                new HealthAssessment.StorageRetention(
+                        20L, 2_000_000_000L, assessedAt, assessedAt, List.of(), List.of()),
                 new HealthAssessment.Clustering(
-                        List.of("event_date"), List.of(), Optional.empty(), 0.0),
+                        List.of("event_date"), false, List.of(), null, true, true, false),
                 new HealthAssessment.Protocol(
-                        3, 7, List.of("deletionVectors"), TableAccessMode.CLASSIC, true),
+                        3,
+                        7,
+                        List.of("deletionVectors"),
+                        TableAccessMode.CLASSIC,
+                        "4.0.1",
+                        "4.0.1",
+                        true,
+                        true,
+                        true),
                 List.of());
     }
 

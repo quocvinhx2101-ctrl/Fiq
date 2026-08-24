@@ -63,9 +63,13 @@ public final class MaintenancePlanner {
         var estimatedBytes = estimateBytes(operationType, health);
         var approvalRequired = capability.approvalRequired() || config.approvalRequired();
 
+        var smallFileCount = health.fileLayout().fileSizeHistogram().countBelow(SMALL_FILE_BYTES);
+        var smallFileRatio =
+                health.fileLayout().activeFileCount() == 0
+                        ? 0
+                        : (double) smallFileCount / health.fileLayout().activeFileCount();
         if (operationType == OperationType.OPTIMIZE_BINPACK
-                && (health.fileLayout().smallFileCount() < MIN_SMALL_FILES
-                        || health.fileLayout().smallFileRatio() < MIN_SMALL_FILE_RATIO)) {
+                && (smallFileCount < MIN_SMALL_FILES || smallFileRatio < MIN_SMALL_FILE_RATIO)) {
             reasons.add("Small-file debt is below the configured recommendation threshold");
         }
         if (operationType == OperationType.OPTIMIZE_ZORDER && config.zOrderColumns().isEmpty()) {
@@ -76,7 +80,7 @@ public final class MaintenancePlanner {
             reasons.add("No files with deletion vectors were observed");
         }
         if (operationType == OperationType.VACUUM_LITE
-                && !health.transactionLog().logCoverageSufficient()) {
+                && !Boolean.TRUE.equals(health.transactionLog().logCoverageSufficient())) {
             reasons.add("VACUUM LITE requires transaction-log coverage for the retention window");
         }
         if (operationType.isVacuum()) {
@@ -115,7 +119,7 @@ public final class MaintenancePlanner {
     private static long estimateBytes(OperationType type, HealthAssessment health) {
         return type.rewritesData()
                 ? health.fileLayout().totalBytes()
-                : health.storageRetention().reclaimableBytes();
+                : Objects.requireNonNullElse(health.storageRetention().tombstoneBytes(), 0L);
     }
 
     private static void requireSameTableAndVersion(

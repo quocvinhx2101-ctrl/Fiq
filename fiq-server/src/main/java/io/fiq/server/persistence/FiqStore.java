@@ -7,6 +7,8 @@ import io.fiq.domain.DeltaCapabilities;
 import io.fiq.domain.DeltaTableSnapshot;
 import io.fiq.domain.HealthAssessment;
 import io.fiq.domain.HealthCompleteness;
+import io.fiq.domain.HealthDimension;
+import io.fiq.domain.HealthDimensionMetadata;
 import io.fiq.domain.MaintenancePolicy;
 import io.fiq.domain.OperationPlan;
 import io.fiq.domain.OperationState;
@@ -41,6 +43,8 @@ import javax.sql.DataSource;
 @ApplicationScoped
 public class FiqStore {
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {};
+    private static final TypeReference<Map<String, Map<String, Object>>> NESTED_OBJECT_MAP =
+            new TypeReference<>() {};
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
 
@@ -185,6 +189,38 @@ public class FiqStore {
         }
     }
 
+    public Map<String, String> tableConnectionOptions(UUID workspaceId, UUID tableId) {
+        return queryOne(
+                """
+                SELECT c.options FROM delta_tables t
+                JOIN connections c ON c.id=t.connection_id
+                WHERE t.workspace_id=? AND t.id=?
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, tableId);
+                },
+                result -> readStringMap(result.getString("options")),
+                "FIQ_TABLE_NOT_FOUND",
+                "Delta table was not found");
+    }
+
+    public ApiModels.ConnectionView tableConnection(UUID workspaceId, UUID tableId) {
+        return queryOne(
+                """
+                SELECT c.* FROM delta_tables t
+                JOIN connections c ON c.id=t.connection_id
+                WHERE t.workspace_id=? AND t.id=?
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, tableId);
+                },
+                this::connectionView,
+                "FIQ_TABLE_NOT_FOUND",
+                "Delta table was not found");
+    }
+
     public Map<String, String> loadTableTags(UUID workspaceId, UUID tableId) {
         return queryOne(
                 "SELECT tags FROM delta_tables WHERE workspace_id=? AND id=?",
@@ -201,6 +237,12 @@ public class FiqStore {
         var sql =
                 """
                 SELECT h.*,
+                  COALESCE((SELECT jsonb_object_agg(d.dimension, jsonb_build_object(
+                    'dimension', d.dimension, 'completeness', d.completeness,
+                    'provenance', d.provenance, 'observedAt', d.observed_at,
+                    'observedVersion', d.observed_version,
+                    'incompleteReason', d.incomplete_reason, 'facts', d.facts))
+                    FROM assessment_dimensions d WHERE d.assessment_id=h.id), '{}') dimensions,
                   COALESCE((SELECT jsonb_agg(jsonb_build_object(
                     'code', i.code, 'severity', i.severity, 'dimension', i.dimension,
                     'summary', i.summary, 'recommendation', i.recommendation))
@@ -224,6 +266,7 @@ public class FiqStore {
                                 result.getString("provenance"),
                                 HealthCompleteness.valueOf(result.getString("completeness")),
                                 result.getString("stale_reason"),
+                                readNestedObjectMap(result.getString("dimensions")),
                                 readObjectMap(result.getString("file_layout")),
                                 readObjectMap(result.getString("deletion_vectors")),
                                 readObjectMap(result.getString("transaction_log")),
@@ -239,13 +282,33 @@ public class FiqStore {
     public HealthAssessment loadHealth(UUID workspaceId, UUID tableId, TableIdentifier table) {
         var view = latestHealthView(workspaceId, tableId);
         try {
+            var dimensions =
+                    new EnumMap<HealthDimension, HealthDimensionMetadata>(HealthDimension.class);
+            for (var entry : view.dimensions().entrySet()) {
+                var value = new java.util.LinkedHashMap<>(entry.getValue());
+                value.remove("facts");
+                dimensions.put(
+                        HealthDimension.valueOf(entry.getKey()),
+                        mapper.convertValue(value, HealthDimensionMetadata.class));
+            }
+            if (dimensions.isEmpty()) {
+                for (var dimension : HealthDimension.values()) {
+                    dimensions.put(
+                            dimension,
+                            new HealthDimensionMetadata(
+                                    dimension,
+                                    view.completeness(),
+                                    view.provenance(),
+                                    view.assessedAt(),
+                                    view.observedVersion(),
+                                    Optional.ofNullable(view.staleReason())));
+                }
+            }
             return new HealthAssessment(
                     table,
                     view.observedVersion(),
                     view.assessedAt(),
-                    view.provenance(),
-                    view.completeness(),
-                    Optional.ofNullable(view.staleReason()),
+                    dimensions,
                     mapper.convertValue(view.fileLayout(), HealthAssessment.FileLayout.class),
                     mapper.convertValue(
                             view.deletionVectors(), HealthAssessment.DeletionVectors.class),
@@ -290,11 +353,35 @@ public class FiqStore {
                             INSERT INTO health_issues(assessment_id, code, severity, dimension,
                               summary, recommendation) VALUES (?, ?, ?, ?, ?, ?)
                             """);
+                    var dimension =
+                            connection.prepareStatement(
+                                    """
+                            INSERT INTO assessment_dimensions(assessment_id, dimension,
+                              completeness, provenance, observed_at, observed_version,
+                              incomplete_reason, facts)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                            """);
+                    var fileDistribution =
+                            connection.prepareStatement(
+                                    """
+                            INSERT INTO file_size_distributions(assessment_id, bucket_width_bytes,
+                              bucket_counts, overflow_count, median_value_bytes,
+                              median_error_bound_bytes, median_method)
+                            VALUES (?, ?, ?::jsonb, ?, ?, ?, ?)
+                            """);
+                    var tombstoneDistribution =
+                            connection.prepareStatement(
+                                    """
+                            INSERT INTO tombstone_age_distributions(assessment_id,
+                              bucket_upper_hours, bucket_counts)
+                            VALUES (?, ?::jsonb, ?::jsonb)
+                            """);
                     var table =
                             connection.prepareStatement(
                                     """
                             UPDATE delta_tables SET current_version=?, partition_columns=?::jsonb,
-                              clustering_columns=?::jsonb, refreshed_at=NOW()
+                              clustering_columns=?::jsonb, min_reader_version=?,
+                              min_writer_version=?, table_features=?::jsonb, refreshed_at=NOW()
                             WHERE workspace_id=? AND id=?
                             """)) {
                 assessment.setObject(1, assessmentId);
@@ -316,6 +403,40 @@ public class FiqStore {
                 assessment.setString(14, json(health.protocol()));
                 assessment.setDouble(15, debtScore);
                 assessment.executeUpdate();
+                for (var entry : health.dimensions().entrySet()) {
+                    var metadata = entry.getValue();
+                    dimension.setObject(1, assessmentId);
+                    dimension.setString(2, entry.getKey().name());
+                    dimension.setString(3, metadata.completeness().name());
+                    dimension.setString(4, metadata.provenance());
+                    dimension.setObject(
+                            5,
+                            java.time.OffsetDateTime.ofInstant(
+                                    metadata.observedAt(), java.time.ZoneOffset.UTC));
+                    dimension.setLong(6, metadata.observedVersion());
+                    dimension.setString(7, metadata.incompleteReason().orElse(null));
+                    dimension.setString(8, json(dimensionFacts(health, entry.getKey())));
+                    dimension.addBatch();
+                }
+                dimension.executeBatch();
+                var histogram = health.fileLayout().fileSizeHistogram();
+                var median = health.fileLayout().medianFileBytes();
+                fileDistribution.setObject(1, assessmentId);
+                fileDistribution.setLong(2, histogram.bucketWidthBytes());
+                fileDistribution.setString(3, json(histogram.bucketCounts()));
+                fileDistribution.setLong(4, histogram.overflowCount());
+                fileDistribution.setLong(5, median.valueBytes());
+                fileDistribution.setLong(6, median.errorBoundBytes());
+                fileDistribution.setString(7, median.method());
+                fileDistribution.executeUpdate();
+                if (!health.storageRetention().tombstoneAgeBucketCounts().isEmpty()) {
+                    tombstoneDistribution.setObject(1, assessmentId);
+                    tombstoneDistribution.setString(
+                            2, json(health.storageRetention().tombstoneAgeBucketHours()));
+                    tombstoneDistribution.setString(
+                            3, json(health.storageRetention().tombstoneAgeBucketCounts()));
+                    tombstoneDistribution.executeUpdate();
+                }
                 for (var value : health.issues()) {
                     issue.setObject(1, assessmentId);
                     issue.setString(2, value.code());
@@ -329,8 +450,11 @@ public class FiqStore {
                 table.setLong(1, health.observedVersion());
                 table.setString(2, json(health.clustering().partitionColumns()));
                 table.setString(3, json(health.clustering().clusteringColumns()));
-                table.setObject(4, workspaceId);
-                table.setObject(5, tableId);
+                table.setInt(4, health.protocol().minReaderVersion());
+                table.setInt(5, health.protocol().minWriterVersion());
+                table.setString(6, json(health.protocol().tableFeatures()));
+                table.setObject(7, workspaceId);
+                table.setObject(8, tableId);
                 if (table.executeUpdate() != 1)
                     throw new SQLException("table disappeared during health refresh");
                 connection.commit();
@@ -1524,6 +1648,26 @@ public class FiqStore {
         } catch (JsonProcessingException exception) {
             throw invalidJson(exception);
         }
+    }
+
+    private Map<String, Map<String, Object>> readNestedObjectMap(String json) {
+        if (json == null || json.isBlank()) return Map.of();
+        try {
+            return mapper.readValue(json, NESTED_OBJECT_MAP);
+        } catch (JsonProcessingException exception) {
+            throw invalidJson(exception);
+        }
+    }
+
+    private static Object dimensionFacts(HealthAssessment health, HealthDimension dimension) {
+        return switch (dimension) {
+            case FILE_LAYOUT -> health.fileLayout();
+            case DELETION_VECTORS -> health.deletionVectors();
+            case TRANSACTION_LOG -> health.transactionLog();
+            case RETENTION -> health.storageRetention();
+            case CLUSTERING -> health.clustering();
+            case PROTOCOL -> health.protocol();
+        };
     }
 
     private List<Map<String, Object>> readObjectList(String json) {

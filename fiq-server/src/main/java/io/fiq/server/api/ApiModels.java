@@ -81,6 +81,7 @@ public final class ApiModels {
             String provenance,
             HealthCompleteness completeness,
             String staleReason,
+            Map<String, Map<String, Object>> dimensions,
             Map<String, Object> fileLayout,
             Map<String, Object> deletionVectors,
             Map<String, Object> transactionLog,
