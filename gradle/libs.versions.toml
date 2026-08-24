@@ -16,6 +16,7 @@ delta-kernel-defaults = { module = "io.delta:delta-kernel-defaults", version.ref
 delta-spark = { module = "io.delta:delta-spark_2.13", version.ref = "delta" }
 spark-sql = { module = "org.apache.spark:spark-sql_2.13", version.ref = "spark" }
 hadoop-common = { module = "org.apache.hadoop:hadoop-common", version.ref = "hadoop" }
+hadoop-aws = { module = "org.apache.hadoop:hadoop-aws", version.ref = "hadoop" }
 scala-library = { module = "org.scala-lang:scala-library", version.ref = "scala" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310", version.ref = "jackson" }

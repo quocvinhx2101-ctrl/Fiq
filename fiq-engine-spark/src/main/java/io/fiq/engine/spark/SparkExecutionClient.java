@@ -3,6 +3,8 @@ package io.fiq.engine.spark;
 public interface SparkExecutionClient {
     String submit(SparkMaintenanceRequest request);
 
+    String submitCatalogDiscovery(SparkCatalogDiscoveryRequest request);
+
     SparkJobStatus status(String jobId);
 
     void cancel(String jobId);

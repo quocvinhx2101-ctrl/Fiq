@@ -44,13 +44,37 @@ public final class LivyExecutionClient implements SparkExecutionClient {
 
     @Override
     public String submit(SparkMaintenanceRequest request) {
+        return submit(
+                mainClass,
+                "fiq-" + request.operationId(),
+                arguments(request),
+                request.sparkConf(),
+                Map.of("spark.fiq.operationId", request.operationId().toString()));
+    }
+
+    @Override
+    public String submitCatalogDiscovery(SparkCatalogDiscoveryRequest request) {
+        return submit(
+                "io.fiq.spark.CatalogDiscoveryJob",
+                "fiq-discovery-" + request.runId(),
+                List.of("--run-id", request.runId().toString(), "--catalog", request.catalog()),
+                request.sparkConf(),
+                Map.of("spark.fiq.discoveryRunId", request.runId().toString()));
+    }
+
+    private String submit(
+            String className,
+            String name,
+            List<String> arguments,
+            Map<String, String> requestedConf,
+            Map<String, String> requiredConf) {
         var body = new LinkedHashMap<String, Object>();
         body.put("file", jobJar);
-        body.put("className", mainClass);
-        body.put("name", "fiq-" + request.operationId());
-        body.put("args", arguments(request));
-        var conf = new LinkedHashMap<>(request.sparkConf());
-        conf.put("spark.fiq.operationId", request.operationId().toString());
+        body.put("className", className);
+        body.put("name", name);
+        body.put("args", arguments);
+        var conf = new LinkedHashMap<>(requestedConf);
+        conf.putAll(requiredConf);
         body.put("conf", conf);
         var response = send("POST", "/batches", body);
         var id = response.get("id");

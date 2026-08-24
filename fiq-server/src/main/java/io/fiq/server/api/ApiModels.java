@@ -169,6 +169,7 @@ public final class ApiModels {
             String engineType,
             String engineUri,
             String secretRef,
+            Map<String, String> options,
             boolean enabled,
             Instant lastTestedAt,
             String lastTestStatus,
@@ -184,6 +185,27 @@ public final class ApiModels {
             String engineUri,
             String secretRef,
             Map<String, String> options) {}
+
+    public record DiscoveryRequest(
+            String rootUri,
+            @Min(0) @Max(32) Integer maxDepth,
+            @Min(1) @Max(100000) Integer maxTables,
+            @Min(1) @Max(86400) Integer timeoutSeconds) {}
+
+    public record DiscoveryRunView(
+            UUID id,
+            UUID connectionId,
+            String state,
+            String rootUri,
+            int maxDepth,
+            int maxTables,
+            int timeoutSeconds,
+            int tablesFound,
+            int tablesMissing,
+            String errorCode,
+            String errorMessage,
+            Instant startedAt,
+            Instant completedAt) {}
 
     public record ConnectionTestResult(
             boolean reachable, String status, String message, Map<String, Object> capabilities) {}

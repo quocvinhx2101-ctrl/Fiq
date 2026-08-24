@@ -790,6 +790,214 @@ public class FiqStore {
                 "Connection was not found");
     }
 
+    public ApiModels.DiscoveryRunView createDiscoveryRun(
+            UUID workspaceId,
+            UUID connectionId,
+            String rootUri,
+            int maxDepth,
+            int maxTables,
+            int timeoutSeconds) {
+        var id = UUID.randomUUID();
+        execute(
+                """
+                INSERT INTO discovery_runs(
+                  id, workspace_id, connection_id, state, root_uri,
+                  max_depth, max_tables, timeout_seconds)
+                VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?)
+                """,
+                statement -> {
+                    statement.setObject(1, id);
+                    statement.setObject(2, workspaceId);
+                    statement.setObject(3, connectionId);
+                    statement.setString(4, rootUri);
+                    statement.setInt(5, maxDepth);
+                    statement.setInt(6, maxTables);
+                    statement.setInt(7, timeoutSeconds);
+                });
+        return discoveryRun(workspaceId, id);
+    }
+
+    public ApiModels.DiscoveryRunView discoveryRun(UUID workspaceId, UUID runId) {
+        return queryOne(
+                "SELECT * FROM discovery_runs WHERE workspace_id=? AND id=?",
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, runId);
+                },
+                this::discoveryRunView,
+                "FIQ_DISCOVERY_RUN_NOT_FOUND",
+                "Discovery run was not found");
+    }
+
+    public void upsertPathTable(
+            UUID workspaceId,
+            ApiModels.ConnectionView connection,
+            String catalogAlias,
+            String namespace,
+            io.fiq.delta.DeltaPathDiscovery.DiscoveredPathTable discovered,
+            boolean sample) {
+        var target = discovered.target();
+        var metrics = discovered.metrics();
+        var path = target.uri().getPath();
+        var tableName = path.substring(path.lastIndexOf('/') + 1);
+        var targetJson = json(Map.of("type", "PATH", "uri", target.uri().toString()));
+        execute(
+                """
+                INSERT INTO delta_tables(
+                  workspace_id, environment_id, connection_id, catalog_name, namespace_parts,
+                  table_name, qualified_name, location_uri, access_mode, current_version,
+                  min_reader_version, min_writer_version, table_features, partition_columns,
+                  clustering_columns, properties, tags, source_type, execution_target_type,
+                  execution_target, execution_target_fingerprint, display_identity,
+                  discovery_status, sample, last_seen_at)
+                VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, 'CLASSIC', ?, 1, 2, '[]', ?::jsonb,
+                  ?::jsonb, ?::jsonb, ?::jsonb, 'PATH', 'PATH', ?::jsonb,
+                  encode(digest(?::jsonb::text, 'sha256'), 'hex'), ?, 'ACTIVE', ?, NOW())
+                ON CONFLICT (workspace_id, connection_id, execution_target_fingerprint)
+                DO UPDATE SET current_version=EXCLUDED.current_version,
+                  partition_columns=EXCLUDED.partition_columns,
+                  clustering_columns=EXCLUDED.clustering_columns,
+                  properties=EXCLUDED.properties, tags=EXCLUDED.tags,
+                  discovery_status='ACTIVE', sample=EXCLUDED.sample,
+                  last_seen_at=NOW(), missing_since=NULL, refreshed_at=NOW()
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, connection.environmentId());
+                    statement.setObject(3, connection.id());
+                    statement.setString(4, catalogAlias);
+                    statement.setString(5, json(List.of(namespace)));
+                    statement.setString(6, tableName);
+                    statement.setString(7, catalogAlias + "." + namespace + "." + tableName);
+                    statement.setString(8, target.uri().toString());
+                    statement.setLong(9, metrics.version());
+                    statement.setString(10, json(metrics.partitionColumns()));
+                    statement.setString(11, json(metrics.clusteringColumns()));
+                    statement.setString(12, json(sample ? Map.of("fiq.sample", "true") : Map.of()));
+                    statement.setString(13, json(sample ? Map.of("sample", "true") : Map.of()));
+                    statement.setString(14, targetJson);
+                    statement.setString(15, targetJson);
+                    statement.setString(16, target.uri().toString());
+                    statement.setBoolean(17, sample);
+                });
+    }
+
+    public void upsertCatalogTable(
+            UUID workspaceId,
+            ApiModels.ConnectionView connection,
+            String catalog,
+            List<String> namespace,
+            String tableName,
+            String location,
+            long version,
+            int minReaderVersion,
+            int minWriterVersion,
+            List<String> features,
+            List<String> partitionColumns,
+            Map<String, String> properties,
+            boolean sample) {
+        var targetJson =
+                json(
+                        Map.of(
+                                "type", "CATALOG",
+                                "catalog", catalog,
+                                "namespace", namespace,
+                                "table", tableName));
+        var qualified = String.join(".", catalog, String.join(".", namespace), tableName);
+        execute(
+                """
+                INSERT INTO delta_tables(
+                  workspace_id, environment_id, connection_id, catalog_name, namespace_parts,
+                  table_name, qualified_name, location_uri, access_mode, current_version,
+                  min_reader_version, min_writer_version, table_features, partition_columns,
+                  clustering_columns, properties, tags, source_type, execution_target_type,
+                  execution_target, execution_target_fingerprint, display_identity,
+                  discovery_status, sample, last_seen_at)
+                VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, 'CLASSIC', ?, ?, ?, ?::jsonb, ?::jsonb,
+                  '[]', ?::jsonb, ?::jsonb, 'HMS', 'CATALOG', ?::jsonb,
+                  encode(digest(?::jsonb::text, 'sha256'), 'hex'), ?, 'ACTIVE', ?, NOW())
+                ON CONFLICT (workspace_id, connection_id, execution_target_fingerprint)
+                DO UPDATE SET location_uri=EXCLUDED.location_uri,
+                  current_version=EXCLUDED.current_version,
+                  min_reader_version=EXCLUDED.min_reader_version,
+                  min_writer_version=EXCLUDED.min_writer_version,
+                  table_features=EXCLUDED.table_features,
+                  partition_columns=EXCLUDED.partition_columns,
+                  properties=EXCLUDED.properties, tags=EXCLUDED.tags,
+                  discovery_status='ACTIVE', sample=EXCLUDED.sample,
+                  last_seen_at=NOW(), missing_since=NULL, refreshed_at=NOW()
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, connection.environmentId());
+                    statement.setObject(3, connection.id());
+                    statement.setString(4, catalog);
+                    statement.setString(5, json(namespace));
+                    statement.setString(6, tableName);
+                    statement.setString(7, qualified);
+                    statement.setString(8, location);
+                    statement.setLong(9, version);
+                    statement.setInt(10, minReaderVersion);
+                    statement.setInt(11, minWriterVersion);
+                    statement.setString(12, json(features));
+                    statement.setString(13, json(partitionColumns));
+                    statement.setString(14, json(properties));
+                    statement.setString(15, json(sample ? Map.of("sample", "true") : Map.of()));
+                    statement.setString(16, targetJson);
+                    statement.setString(17, targetJson);
+                    statement.setString(18, qualified);
+                    statement.setBoolean(19, sample);
+                });
+    }
+
+    public ApiModels.DiscoveryRunView completeDiscovery(
+            UUID workspaceId, UUID runId, int tablesFound) {
+        var missing =
+                execute(
+                        """
+                        UPDATE delta_tables SET discovery_status='MISSING', missing_since=NOW()
+                        WHERE workspace_id=?
+                          AND connection_id=(SELECT connection_id FROM discovery_runs WHERE id=? AND workspace_id=?)
+                          AND discovery_status='ACTIVE'
+                          AND last_seen_at < (SELECT started_at FROM discovery_runs WHERE id=? AND workspace_id=?)
+                        """,
+                        statement -> {
+                            statement.setObject(1, workspaceId);
+                            statement.setObject(2, runId);
+                            statement.setObject(3, workspaceId);
+                            statement.setObject(4, runId);
+                            statement.setObject(5, workspaceId);
+                        });
+        execute(
+                """
+                UPDATE discovery_runs SET state='SUCCEEDED', tables_found=?, tables_missing=?,
+                  completed_at=NOW() WHERE workspace_id=? AND id=? AND state='RUNNING'
+                """,
+                statement -> {
+                    statement.setInt(1, tablesFound);
+                    statement.setInt(2, missing);
+                    statement.setObject(3, workspaceId);
+                    statement.setObject(4, runId);
+                });
+        return discoveryRun(workspaceId, runId);
+    }
+
+    public ApiModels.DiscoveryRunView failDiscovery(
+            UUID workspaceId, UUID runId, String code, String message) {
+        execute(
+                """
+                UPDATE discovery_runs SET state='FAILED', error_code=?, error_message=?,
+                  completed_at=NOW() WHERE workspace_id=? AND id=? AND state='RUNNING'
+                """,
+                statement -> {
+                    statement.setString(1, code);
+                    statement.setString(2, message);
+                    statement.setObject(3, workspaceId);
+                    statement.setObject(4, runId);
+                });
+        return discoveryRun(workspaceId, runId);
+    }
+
     public void recordConnectionTest(
             UUID workspaceId, UUID connectionId, String status, String message) {
         var updated =
@@ -1132,6 +1340,7 @@ public class FiqStore {
                         result.getString("catalog_name"),
                         readStringList(result.getString("namespace_parts")),
                         result.getString("table_name"),
+                        Optional.ofNullable(result.getString("location_uri")),
                         executionTarget(result, ""));
         return new DeltaTableSnapshot(
                 identifier,
@@ -1216,10 +1425,28 @@ public class FiqStore {
                 result.getString("engine_type"),
                 result.getString("engine_uri"),
                 result.getString("secret_ref"),
+                readStringMap(result.getString("options")),
                 result.getBoolean("enabled"),
                 instantNullable(result, "last_tested_at"),
                 result.getString("last_test_status"),
                 result.getString("last_test_message"));
+    }
+
+    private ApiModels.DiscoveryRunView discoveryRunView(ResultSet result) throws SQLException {
+        return new ApiModels.DiscoveryRunView(
+                result.getObject("id", UUID.class),
+                result.getObject("connection_id", UUID.class),
+                result.getString("state"),
+                result.getString("root_uri"),
+                result.getInt("max_depth"),
+                result.getInt("max_tables"),
+                result.getInt("timeout_seconds"),
+                result.getInt("tables_found"),
+                result.getInt("tables_missing"),
+                result.getString("error_code"),
+                result.getString("error_message"),
+                instant(result, "started_at"),
+                instantNullable(result, "completed_at"));
     }
 
     private ApiModels.ApiKeyView apiKeyView(ResultSet result) throws SQLException {

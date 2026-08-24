@@ -21,6 +21,11 @@ public class SparkClientProvider {
     @Produces
     @ApplicationScoped
     SparkExecutionClient sparkClient() {
-        return new LivyExecutionClient(URI.create(livyUrl), jobJar, mainClass);
+        return forEndpoint(livyUrl);
+    }
+
+    public SparkExecutionClient forEndpoint(String endpoint) {
+        var resolved = endpoint == null || endpoint.isBlank() ? livyUrl : endpoint;
+        return new LivyExecutionClient(URI.create(resolved), jobJar, mainClass);
     }
 }

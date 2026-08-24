@@ -2,6 +2,7 @@ package io.fiq.domain;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 public record TableIdentifier(
@@ -10,6 +11,7 @@ public record TableIdentifier(
         String catalog,
         List<String> namespace,
         String name,
+        Optional<String> location,
         ExecutionTarget executionTarget) {
 
     public TableIdentifier {
@@ -22,17 +24,12 @@ public record TableIdentifier(
             throw new IllegalArgumentException("namespace must contain non-blank components");
         }
         name = requireText(name, "name");
+        location = location == null ? Optional.empty() : location.filter(value -> !value.isBlank());
         executionTarget = Objects.requireNonNull(executionTarget, "executionTarget");
     }
 
     public String qualifiedName() {
         return String.join(".", catalog, String.join(".", namespace), name);
-    }
-
-    public java.util.Optional<String> location() {
-        return executionTarget instanceof PathTarget path
-                ? java.util.Optional.of(path.uri().toString())
-                : java.util.Optional.empty();
     }
 
     private static String requireText(String value, String field) {
