@@ -3,6 +3,9 @@
 FIQ discovers Classic Delta tables, measures their maintenance state independently of policy,
 explains policy decisions, safely runs qualified maintenance, and verifies the result.
 
+New to FIQ? Start with the [end-user guide](docs/end-user-guide.md), which covers both the local
+demo and connecting an existing MinIO/Spark/Delta platform.
+
 ```text
 DISCOVER → ASSESS FACTS → EVALUATE POLICY → EXPLAIN → PREFLIGHT
          → OPTIMIZE / VACUUM FULL → VERIFY BEFORE/AFTER
@@ -108,6 +111,7 @@ This branch is the **Phase 1 Classic Delta Maintenance Core**, not a general pro
 claim. See [`docs/phase-status.md`](docs/phase-status.md) for tested and unresolved boundaries.
 
 See [`docs/architecture.md`](docs/architecture.md),
+[`docs/end-user-guide.md`](docs/end-user-guide.md),
 [`docs/operator-guide.md`](docs/operator-guide.md),
 [`docs/admin-guide.md`](docs/admin-guide.md), and
 [`docs/upgrade-guide.md`](docs/upgrade-guide.md) for safety and deployment details.

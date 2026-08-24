@@ -1,5 +1,8 @@
 # Operator guide
 
+For the first-run UI workflow and connection examples, see the
+[end-user guide](end-user-guide.md).
+
 ## Minimal FIQ runtime
 
 FIQ has one required runtime dependency: PostgreSQL. Start the server, UI, and database with:
