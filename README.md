@@ -39,3 +39,5 @@ docker compose up --build
 See `docs/architecture.md`, `docs/operator-guide.md`, `docs/admin-guide.md`,
 `docs/upgrade-guide.md`, and `docs/phase-status.md` for safety, deployment, and the explicit
 qualification boundary.
+
+Development changes follow the sustainable Git workflow in [`CONTRIBUTING.md`](CONTRIBUTING.md).
