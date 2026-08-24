@@ -1,0 +1,6 @@
+.git
+.gradle
+**/build
+fiq-ui/node_modules
+fiq-ui/playwright-report
+fiq-ui/test-results

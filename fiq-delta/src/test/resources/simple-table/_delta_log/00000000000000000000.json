@@ -1,0 +1,5 @@
+{"commitInfo":{"timestamp":1787529600000,"operation":"WRITE","operationParameters":{"mode":"Append"},"isBlindAppend":true}}
+{"protocol":{"minReaderVersion":3,"minWriterVersion":7,"readerFeatures":["deletionVectors"],"writerFeatures":["deletionVectors"]}}
+{"metaData":{"id":"00000000-0000-0000-0000-000000000042","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":["day"],"configuration":{"delta.enableDeletionVectors":"true"},"createdTime":1787529600000}}
+{"add":{"path":"day=2026-08-24/part-00000.parquet","partitionValues":{"day":"2026-08-24"},"size":1024,"modificationTime":1787529600000,"dataChange":true,"stats":"{\"numRecords\":100}"}}
+{"add":{"path":"day=2026-08-24/part-00001.parquet","partitionValues":{"day":"2026-08-24"},"size":2048,"modificationTime":1787529600000,"dataChange":true,"deletionVector":{"storageType":"i","pathOrInlineDv":"AA==","offset":null,"sizeInBytes":1,"cardinality":3},"stats":"{\"numRecords\":100}"}}

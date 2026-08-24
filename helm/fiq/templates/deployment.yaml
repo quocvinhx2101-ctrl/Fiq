@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels: { app.kubernetes.io/name: fiq, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: fiq, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: fiq, app.kubernetes.io/instance: {{ .Release.Name }} }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: fiq
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ name: http, containerPort: 9091 }]
+          env:
+            - { name: FIQ_DATABASE_URL, value: {{ .Values.config.databaseUrl | quote }} }
+            - { name: FIQ_DATABASE_USER, value: {{ .Values.config.databaseUser | quote }} }
+            - { name: FIQ_DATABASE_PASSWORD, valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: database-password } } }
+            - { name: FIQ_LIVY_URL, value: {{ .Values.config.livyUrl | quote }} }
+            - { name: FIQ_OIDC_URL, value: {{ .Values.config.oidcUrl | quote }} }
+            - { name: FIQ_OIDC_CLIENT_ID, value: {{ .Values.config.oidcClientId | quote }} }
+            - { name: FIQ_OIDC_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: oidc-client-secret } } }
+            - { name: FIQ_DEFAULT_WORKSPACE_ID, value: {{ .Values.config.defaultWorkspaceId | quote }} }
+          readinessProbe: { httpGet: { path: /q/health/ready, port: http }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /q/health/live, port: http }, periodSeconds: 20 }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, readOnlyRootFilesystem: true }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: {{ .Release.Name }} }
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: fiq, app.kubernetes.io/instance: {{ .Release.Name }} }
