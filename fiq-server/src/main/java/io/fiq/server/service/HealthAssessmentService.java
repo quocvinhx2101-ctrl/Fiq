@@ -47,8 +47,8 @@ public class HealthAssessmentService {
     @Inject SparkClientProvider sparkClients;
     @Inject ObjectMapper mapper;
 
-    @ConfigProperty(name = "fiq.s3.endpoint", defaultValue = "")
-    String s3Endpoint;
+    @ConfigProperty(name = "fiq.s3.endpoint")
+    Optional<String> s3Endpoint;
 
     private final DeltaKernelInspector inspector = new DeltaKernelInspector();
 
@@ -401,12 +401,15 @@ public class HealthAssessmentService {
         store.tableConnectionOptions(workspaceId, tableId).entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith("fs."))
                 .forEach(entry -> options.put(entry.getKey(), entry.getValue()));
-        if (!s3Endpoint.isBlank()) {
-            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
-            options.put("fs.s3a.endpoint", s3Endpoint);
-            options.put("fs.s3a.path.style.access", "true");
-            options.put("fs.s3a.connection.ssl.enabled", "false");
-        }
+        s3Endpoint
+                .filter(endpoint -> !endpoint.isBlank())
+                .ifPresent(
+                        endpoint -> {
+                            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
+                            options.put("fs.s3a.endpoint", endpoint);
+                            options.put("fs.s3a.path.style.access", "true");
+                            options.put("fs.s3a.connection.ssl.enabled", "false");
+                        });
         return Map.copyOf(options);
     }
 }

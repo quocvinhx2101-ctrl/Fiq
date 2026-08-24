@@ -17,13 +17,12 @@ COPY fiq-spark-job/ fiq-spark-job/
 COPY fiq-server/ fiq-server/
 COPY --from=ui /src/fiq-server/src/main/resources/META-INF/resources/ fiq-server/src/main/resources/META-INF/resources/
 RUN --mount=type=cache,target=/root/.gradle \
-    ./gradlew :fiq-server:quarkusBuild :fiq-spark-job:shadowJar --no-daemon
+    ./gradlew :fiq-server:quarkusBuild --no-daemon
 
 FROM eclipse-temurin:21-jre-noble AS runtime
 RUN useradd --system --uid 10001 --create-home fiq
 WORKDIR /opt/fiq
 COPY --from=backend --chown=fiq:fiq /src/fiq-server/build/quarkus-app/ ./
-COPY --from=backend --chown=fiq:fiq /src/fiq-spark-job/build/libs/*-all.jar ./fiq-spark-job.jar
 USER 10001
 EXPOSE 9091
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -Djava.util.logging.manager=org.jboss.logmanager.LogManager"

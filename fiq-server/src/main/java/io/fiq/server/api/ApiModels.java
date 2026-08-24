@@ -193,7 +193,7 @@ public final class ApiModels {
             String catalogUri,
             String warehouseUri,
             @NotBlank String engineType,
-            String engineUri,
+            @NotBlank String engineUri,
             String secretRef,
             Map<String, String> options) {}
 

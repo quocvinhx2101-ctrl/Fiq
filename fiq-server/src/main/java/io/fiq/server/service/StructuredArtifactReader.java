@@ -10,6 +10,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -20,8 +21,8 @@ public class StructuredArtifactReader {
 
     @Inject ObjectMapper mapper;
 
-    @ConfigProperty(name = "fiq.s3.endpoint", defaultValue = "")
-    String s3Endpoint;
+    @ConfigProperty(name = "fiq.s3.endpoint")
+    Optional<String> s3Endpoint;
 
     public Artifact read(String prefix, Map<String, String> connectionOptions) {
         try {
@@ -67,12 +68,15 @@ public class StructuredArtifactReader {
         connectionOptions.entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith("fs."))
                 .forEach(entry -> options.put(entry.getKey(), entry.getValue()));
-        if (!s3Endpoint.isBlank()) {
-            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
-            options.put("fs.s3a.endpoint", s3Endpoint);
-            options.put("fs.s3a.path.style.access", "true");
-            options.put("fs.s3a.connection.ssl.enabled", "false");
-        }
+        s3Endpoint
+                .filter(endpoint -> !endpoint.isBlank())
+                .ifPresent(
+                        endpoint -> {
+                            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
+                            options.put("fs.s3a.endpoint", endpoint);
+                            options.put("fs.s3a.path.style.access", "true");
+                            options.put("fs.s3a.connection.ssl.enabled", "false");
+                        });
         options.forEach(configuration::set);
         return configuration;
     }

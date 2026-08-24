@@ -21,6 +21,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -35,8 +36,8 @@ public class DiscoveryService {
     @ConfigProperty(name = "fiq.sample.enabled", defaultValue = "false")
     boolean sampleEnabled;
 
-    @ConfigProperty(name = "fiq.s3.endpoint", defaultValue = "")
-    String s3Endpoint;
+    @ConfigProperty(name = "fiq.s3.endpoint")
+    Optional<String> s3Endpoint;
 
     private final DeltaPathDiscovery pathDiscovery = new DeltaPathDiscovery();
 
@@ -227,12 +228,15 @@ public class DiscoveryService {
         connection.options().entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith("fs."))
                 .forEach(entry -> options.put(entry.getKey(), entry.getValue()));
-        if (!s3Endpoint.isBlank()) {
-            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
-            options.put("fs.s3a.endpoint", s3Endpoint);
-            options.put("fs.s3a.path.style.access", "true");
-            options.put("fs.s3a.connection.ssl.enabled", "false");
-        }
+        s3Endpoint
+                .filter(endpoint -> !endpoint.isBlank())
+                .ifPresent(
+                        endpoint -> {
+                            options.put("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
+                            options.put("fs.s3a.endpoint", endpoint);
+                            options.put("fs.s3a.path.style.access", "true");
+                            options.put("fs.s3a.connection.ssl.enabled", "false");
+                        });
         return Map.copyOf(options);
     }
 
