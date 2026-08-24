@@ -43,6 +43,16 @@ public class DiscoveryService {
     public ApiModels.DiscoveryRunView discover(
             UUID workspaceId, UUID connectionId, ApiModels.DiscoveryRequest request) {
         access.require(Role.ADMIN);
+        return discoverInternal(workspaceId, connectionId, request);
+    }
+
+    public ApiModels.DiscoveryRunView discoverSystem(
+            UUID workspaceId, UUID connectionId, ApiModels.DiscoveryRequest request) {
+        return discoverInternal(workspaceId, connectionId, request);
+    }
+
+    private ApiModels.DiscoveryRunView discoverInternal(
+            UUID workspaceId, UUID connectionId, ApiModels.DiscoveryRequest request) {
         var connection = store.connection(workspaceId, connectionId);
         if (!"PATH".equalsIgnoreCase(connection.catalogType())
                 && !"HMS".equalsIgnoreCase(connection.catalogType())) {

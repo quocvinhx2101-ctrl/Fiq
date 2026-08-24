@@ -1199,6 +1199,48 @@ public class FiqStore {
         return connection(workspaceId, id);
     }
 
+    public ApiModels.ConnectionView ensureSampleConnection(
+            UUID id,
+            UUID workspaceId,
+            UUID environmentId,
+            String name,
+            String catalogType,
+            String catalogUri,
+            String warehouseUri,
+            String engineUri,
+            Map<String, String> options) {
+        execute(
+                """
+                INSERT INTO connections(id, workspace_id, environment_id, name, catalog_type,
+                  catalog_uri, warehouse_uri, engine_type, engine_uri, options)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'LIVY', ?, ?::jsonb)
+                ON CONFLICT (workspace_id, name) DO UPDATE SET
+                  catalog_type=EXCLUDED.catalog_type, catalog_uri=EXCLUDED.catalog_uri,
+                  warehouse_uri=EXCLUDED.warehouse_uri, engine_uri=EXCLUDED.engine_uri,
+                  options=EXCLUDED.options, enabled=true, updated_at=NOW()
+                """,
+                statement -> {
+                    statement.setObject(1, id);
+                    statement.setObject(2, workspaceId);
+                    statement.setObject(3, environmentId);
+                    statement.setString(4, name);
+                    statement.setString(5, catalogType);
+                    statement.setString(6, catalogUri);
+                    statement.setString(7, warehouseUri);
+                    statement.setString(8, engineUri);
+                    statement.setString(9, json(options));
+                });
+        return queryOne(
+                "SELECT * FROM connections WHERE workspace_id=? AND name=?",
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setString(2, name);
+                },
+                this::connectionView,
+                "FIQ_SAMPLE_CONNECTION_FAILED",
+                "Sample connection was not created");
+    }
+
     public ApiModels.ConnectionView connection(UUID workspaceId, UUID connectionId) {
         return queryOne(
                 "SELECT * FROM connections WHERE workspace_id=? AND id=?",
