@@ -13,7 +13,7 @@ object SampleDataJob {
     val spark = SparkSession.builder().appName("FIQ sample Classic Delta tables").enableHiveSupport().getOrCreate()
     try {
       seedSmallFiles(spark, s"$root/path/small_files", 96)
-      seedHms(spark, s"$root/hms/small_files")
+      seedHms(spark, s"$root/hms")
       seedDeletionVectors(spark, s"$root/path/deletion_vectors")
       seedHistory(spark, s"$root/path/history_checkpoint")
       seedVacuum(spark, s"$root/path/vacuum")
@@ -29,8 +29,14 @@ object SampleDataJob {
     spark.sql(s"ALTER TABLE delta.`$path` SET TBLPROPERTIES ('fiq.sample'='true')")
   }
 
-  private def seedHms(spark: SparkSession, path: String): Unit = {
-    spark.sql("CREATE DATABASE IF NOT EXISTS fiq_sample")
+  private def seedHms(spark: SparkSession, root: String): Unit = {
+    val databaseLocation = s"$root/fiq_sample.db"
+    val path = s"$databaseLocation/hms_small_files"
+    // The metastore stores metadata only. Keeping both the namespace and table location on
+    // shared object storage prevents Spark from staging managed-table paths on a container's
+    // private local filesystem.
+    spark.sql(s"CREATE DATABASE IF NOT EXISTS fiq_sample LOCATION '$databaseLocation'")
+    spark.sql(s"ALTER DATABASE fiq_sample SET LOCATION '$databaseLocation'")
     if (!DeltaTable.isDeltaTable(spark, path)) {
       spark.range(0, 6400).withColumnRenamed("id", "event_id").repartition(64)
         .write.format("delta").mode("overwrite").save(path)

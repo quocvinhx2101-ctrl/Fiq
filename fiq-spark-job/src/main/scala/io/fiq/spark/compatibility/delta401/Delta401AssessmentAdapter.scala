@@ -60,7 +60,11 @@ object Delta401AssessmentAdapter {
     val checkpointAt = if (checkpoint.isEmpty || checkpoint.topLevelFiles.isEmpty) null
       else java.lang.Long.valueOf(checkpoint.topLevelFiles.map(_.getModificationTime).max)
     val protocol = snapshot.protocol
-    val features = (protocol.getReaderFeatures.asScala ++ protocol.getWriterFeatures.asScala).toSeq.sorted
+    // Protocol feature sets are null for legacy protocol tables. Null means "no declared
+    // features" here, not UNKNOWN; the reader/writer protocol numbers remain authoritative.
+    val readerFeatures = Option(protocol.getReaderFeatures).toSeq.flatMap(_.asScala)
+    val writerFeatures = Option(protocol.getWriterFeatures).toSeq.flatMap(_.asScala)
+    val features = (readerFeatures ++ writerFeatures).distinct.sorted
     val deltaVersion = classOf[DeltaLog].getPackage.getImplementationVersion
     Map(
       "schemaVersion" -> 1,

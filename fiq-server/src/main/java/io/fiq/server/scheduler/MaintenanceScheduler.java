@@ -291,22 +291,13 @@ public class MaintenanceScheduler {
         verification.put("preVersion", number(result.get("preVersion"), -1).longValue());
         verification.put("postVersion", number(result.get("postVersion"), -1).longValue());
         if (operation.operationType() == OperationType.OPTIMIZE_BINPACK) {
-            var beforeSmall =
-                    number(
-                                    operation.policyEvaluation().get("observations")
-                                                    instanceof Map<?, ?> map
-                                            ? map.get("filesBelowThreshold")
-                                            : null,
-                                    -1)
-                            .longValue();
-            var beforeRatio =
-                    number(
-                                    operation.policyEvaluation().get("observations")
-                                                    instanceof Map<?, ?> map
-                                            ? map.get("smallFileRatio")
-                                            : null,
-                                    -1)
-                            .doubleValue();
+            var observations =
+                    operation.policyEvaluation().get("observations") instanceof Map<?, ?> map
+                            ? map
+                            : Map.of();
+            var beforeActive = number(observations.get("activeFileCount"), -1).longValue();
+            var beforeSmall = number(observations.get("filesBelowThreshold"), -1).longValue();
+            var beforeRatio = number(observations.get("smallFileRatio"), -1).doubleValue();
             var policy = store.loadPolicy(operation.workspaceId(), operation.policyId());
             var threshold =
                     config(policy, operation.operationType())
@@ -323,6 +314,7 @@ public class MaintenanceScheduler {
                 throw new IllegalStateException(
                         "OPTIMIZE command completed but file-layout evidence did not improve");
             }
+            verification.put("activeFilesBefore", beforeActive);
             verification.put("activeFilesAfter", assessment.fileLayout().activeFileCount());
             verification.put("smallFilesBefore", beforeSmall);
             verification.put("smallFilesAfter", afterSmall);

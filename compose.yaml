@@ -57,6 +57,8 @@ services:
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      AWS_ACCESS_KEY_ID: fiq
+      AWS_SECRET_ACCESS_KEY: fiq-development-only
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hms-postgres:5432/metastore
@@ -79,6 +81,7 @@ services:
       AWS_SECRET_ACCESS_KEY: fiq-development-only
     volumes:
       - ./fiq-spark-job/build/libs/fiq-spark-job-0.1.0-SNAPSHOT-all.jar:/opt/fiq/fiq-spark-job.jar:ro
+      - fiq-ivy:/home/livy/.ivy2.5.2
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8998/batches?size=1 >/dev/null"]
       interval: 10s
@@ -95,6 +98,7 @@ services:
       AWS_SECRET_ACCESS_KEY: fiq-development-only
     volumes:
       - ./fiq-spark-job/build/libs/fiq-spark-job-0.1.0-SNAPSHOT-all.jar:/opt/fiq/fiq-spark-job.jar:ro
+      - fiq-ivy:/home/livy/.ivy2.5.2
     command:
       - /opt/spark/bin/spark-submit
       - --class
@@ -131,3 +135,4 @@ volumes:
   fiq-postgres:
   fiq-minio:
   fiq-hms-postgres:
+  fiq-ivy:

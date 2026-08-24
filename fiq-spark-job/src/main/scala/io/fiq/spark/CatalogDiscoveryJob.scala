@@ -36,11 +36,15 @@ object CatalogDiscoveryJob {
       if (!"delta".equalsIgnoreCase(detail.getAs[String]("format"))) return None
       val properties = value[scala.collection.Map[String, String]](detail, "properties")
         .map(_.toMap).getOrElse(Map.empty)
+      // Delta 4.0.1 / Spark 4 DESCRIBE DETAIL no longer exposes `version`; history is the
+      // catalog-qualified, supported source of the authoritative current version.
+      val version = spark.sql(s"DESCRIBE HISTORY $qualified LIMIT 1")
+        .select("version").head().getLong(0)
       Some(Map(
         "namespace" -> Seq(namespace),
         "table" -> table,
         "location" -> detail.getAs[String]("location"),
-        "version" -> detail.getAs[Long]("version"),
+        "version" -> version,
         "minReaderVersion" -> detail.getAs[Int]("minReaderVersion"),
         "minWriterVersion" -> detail.getAs[Int]("minWriterVersion"),
         "partitionColumns" -> value[Seq[String]](detail, "partitionColumns").getOrElse(Seq.empty),
@@ -48,7 +52,11 @@ object CatalogDiscoveryJob {
         "properties" -> properties,
         "sample" -> properties.get("fiq.sample").contains("true")))
     } catch {
-      case _: Exception => None
+      case exception: Exception =>
+        // A non-Delta or unreadable table must not fail the whole catalog scan, but emit enough
+        // bounded evidence for operators to understand why it was skipped.
+        println(s"FIQ_CATALOG_DISCOVERY_SKIPPED:$qualified:${exception.getClass.getSimpleName}:${Option(exception.getMessage).getOrElse("")}")
+        None
     }
   }
 

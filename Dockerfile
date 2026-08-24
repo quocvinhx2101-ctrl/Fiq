@@ -16,7 +16,8 @@ COPY fiq-engine-spark/ fiq-engine-spark/
 COPY fiq-spark-job/ fiq-spark-job/
 COPY fiq-server/ fiq-server/
 COPY --from=ui /src/fiq-server/src/main/resources/META-INF/resources/ fiq-server/src/main/resources/META-INF/resources/
-RUN ./gradlew :fiq-server:quarkusBuild :fiq-spark-job:shadowJar --no-daemon
+RUN --mount=type=cache,target=/root/.gradle \
+    ./gradlew :fiq-server:quarkusBuild :fiq-spark-job:shadowJar --no-daemon
 
 FROM eclipse-temurin:21-jre-noble AS runtime
 RUN useradd --system --uid 10001 --create-home fiq

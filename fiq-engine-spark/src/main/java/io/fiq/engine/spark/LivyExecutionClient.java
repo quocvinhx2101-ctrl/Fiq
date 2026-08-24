@@ -114,9 +114,13 @@ public final class LivyExecutionClient implements SparkExecutionClient {
 
     @Override
     public SparkJobStatus status(String jobId) {
-        var response = send("GET", "/batches/" + numericJobId(jobId), null);
+        var id = numericJobId(jobId);
+        var response = send("GET", "/batches/" + id, null);
         var state = mapState(String.valueOf(response.getOrDefault("state", "unknown")));
-        var log = stringList(response.get("log"));
+        // The batch resource contains only Livy's short tail. Discovery emits a structured
+        // marker before Spark shutdown, so retrieve the full bounded log through Livy's log API.
+        var logResponse = send("GET", "/batches/" + id + "/log?from=0&size=10000", null);
+        var log = stringList(logResponse.get("log"));
         return new SparkJobStatus(
                 jobId,
                 state,

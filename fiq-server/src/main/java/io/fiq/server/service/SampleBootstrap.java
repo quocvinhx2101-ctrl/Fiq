@@ -38,7 +38,7 @@ public class SampleBootstrap {
                         "Sample PATH",
                         "PATH",
                         null,
-                        "s3a://fiq-samples",
+                        "s3a://fiq-samples/path",
                         "http://livy:8998",
                         Map.of("catalogAlias", "sample", "namespacePrefix", "path"));
         var hms =
@@ -55,7 +55,7 @@ public class SampleBootstrap {
         discovery.discoverSystem(
                 WORKSPACE,
                 path.id(),
-                new ApiModels.DiscoveryRequest("s3a://fiq-samples", 4, 10_000, 1800));
+                new ApiModels.DiscoveryRequest("s3a://fiq-samples/path", 3, 10_000, 1800));
         discovery.discoverSystem(
                 WORKSPACE, hms.id(), new ApiModels.DiscoveryRequest(null, 0, 10_000, 1800));
         complete = true;

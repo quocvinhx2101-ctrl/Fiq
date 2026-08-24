@@ -956,10 +956,10 @@ public class FiqStore {
                 execute(
                         """
                         UPDATE operation_steps s SET state=?, evidence=?::jsonb,
-                          started_at=CASE WHEN ?='RUNNING' THEN COALESCE(started_at, NOW())
-                            ELSE started_at END,
+                          started_at=CASE WHEN ?='RUNNING' THEN COALESCE(s.started_at, NOW())
+                            ELSE s.started_at END,
                           completed_at=CASE WHEN ? IN ('SUCCEEDED','FAILED','CANCELLED')
-                            THEN NOW() ELSE completed_at END
+                            THEN NOW() ELSE s.completed_at END
                         FROM operation_runs o
                         WHERE s.operation_id=o.id AND o.workspace_id=? AND o.id=? AND s.name=?
                         """,
@@ -1839,8 +1839,10 @@ public class FiqStore {
     private io.fiq.domain.ExecutionTarget executionTarget(ResultSet result, String prefix)
             throws SQLException {
         var value = readObjectMap(result.getString(prefix + "execution_target"));
-        var type = result.getString(prefix + "target_type");
-        if (type == null && prefix.isEmpty()) type = result.getString("execution_target_type");
+        var type =
+                prefix.isEmpty()
+                        ? result.getString("execution_target_type")
+                        : result.getString(prefix + "target_type");
         return switch (type) {
             case "PATH" -> io.fiq.domain.PathTarget.of(String.valueOf(value.get("uri")));
             case "CATALOG" ->
