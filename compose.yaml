@@ -26,6 +26,14 @@ services:
       FIQ_OIDC_ENABLED: "false"
       FIQ_COOKIE_SECURE: "false"
       FIQ_SAMPLE_ENABLED: "false"
+      # Optional pass-through for an existing S3-compatible platform. When the host variables
+      # are unset, Compose omits them and FIQ still starts in an empty/configurable state.
+      FIQ_S3_ENDPOINT:
+      FIQ_RESULTS_PREFIX:
+      FIQ_LIVY_JOB_JAR:
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
+      AWS_SESSION_TOKEN:
     ports: ["9091:9091"]
     depends_on:
       postgres: { condition: service_healthy }
