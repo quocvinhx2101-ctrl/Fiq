@@ -27,12 +27,12 @@ class MaintenancePlannerTest {
                         OperationType.OPTIMIZE_BINPACK);
 
         assertThat(plan.executable()).isTrue();
-        assertThat(plan.commandPreview()).isEqualTo("OPTIMIZE `main`.`analytics`.`events`");
+        assertThat(plan.commandPreview()).isEqualTo("OPTIMIZE delta.`s3://lake/analytics/events`");
         assertThat(plan.estimatedBytes()).isEqualTo(10_000_000_000L);
     }
 
     @Test
-    void vacuumLiteFailsClosedWhenCoverageIsMissing() {
+    void vacuumLiteIsNotQualifiedInPhaseOne() {
         var config = new MaintenancePolicy.OperationConfig(168, List.of(), "", "", true, false);
 
         var plan =
@@ -44,7 +44,8 @@ class MaintenancePlannerTest {
 
         assertThat(plan.executable()).isFalse();
         assertThat(plan.reasons())
-                .containsExactly(
+                .contains(
+                        "Operation is not qualified in FIQ Phase 1",
                         "VACUUM LITE requires transaction-log coverage for the retention window");
         assertThat(plan.warnings()).contains("FIQ will execute VACUUM DRY RUN before deletion");
     }

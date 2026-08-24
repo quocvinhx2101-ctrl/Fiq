@@ -121,7 +121,8 @@ public class FiqStore {
                        COALESCE((h.file_layout->>'totalBytes')::bigint, 0) total_bytes,
                        COALESCE(h.debt_score, 0) debt_score,
                        COALESCE(h.completeness, 'STALE') health_completeness,
-                       COALESCE((SELECT MAX(i.severity) FROM health_issues i WHERE i.assessment_id=h.id), 'HEALTHY') severity
+                       COALESCE((SELECT i.severity FROM health_issues i WHERE i.assessment_id=h.id
+                         ORDER BY i.severity_rank DESC LIMIT 1), 'HEALTHY') severity
                 FROM delta_tables t
                 LEFT JOIN LATERAL (
                     SELECT * FROM health_assessments h0
@@ -1061,7 +1062,9 @@ public class FiqStore {
 
     private String operationSelect() {
         return """
-                SELECT o.*, t.qualified_name table_qualified_name
+                SELECT o.*, t.qualified_name table_qualified_name,
+                  t.execution_target_type table_target_type,
+                  t.execution_target table_execution_target
                 FROM operation_runs o JOIN delta_tables t ON t.id=o.table_id
                 """;
     }
@@ -1072,6 +1075,7 @@ public class FiqStore {
                 result.getObject("workspace_id", UUID.class),
                 result.getObject("table_id", UUID.class),
                 result.getString("table_qualified_name"),
+                executionTarget(result, "table_"),
                 result.getObject("policy_id", UUID.class),
                 OperationType.valueOf(result.getString("operation_type")),
                 OperationState.valueOf(result.getString("state")),
@@ -1128,7 +1132,7 @@ public class FiqStore {
                         result.getString("catalog_name"),
                         readStringList(result.getString("namespace_parts")),
                         result.getString("table_name"),
-                        Optional.ofNullable(result.getString("location_uri")));
+                        executionTarget(result, ""));
         return new DeltaTableSnapshot(
                 identifier,
                 TableAccessMode.valueOf(result.getString("access_mode")),
@@ -1144,6 +1148,27 @@ public class FiqStore {
                 result.getBoolean("filesystem_visible_state_current"));
     }
 
+    private io.fiq.domain.ExecutionTarget executionTarget(ResultSet result, String prefix)
+            throws SQLException {
+        var value = readObjectMap(result.getString(prefix + "execution_target"));
+        var type = result.getString(prefix + "target_type");
+        if (type == null && prefix.isEmpty()) type = result.getString("execution_target_type");
+        return switch (type) {
+            case "PATH" -> io.fiq.domain.PathTarget.of(String.valueOf(value.get("uri")));
+            case "CATALOG" ->
+                    new io.fiq.domain.CatalogTarget(
+                            String.valueOf(value.get("catalog")),
+                            objectStringList(value.get("namespace")),
+                            String.valueOf(value.get("table")));
+            default -> throw new SQLException("Unknown execution target type: " + type);
+        };
+    }
+
+    private static List<String> objectStringList(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().map(String::valueOf).toList();
+    }
+
     private RowHandle tableRow(UUID workspaceId, UUID tableId) {
         try {
             var connection = dataSource.getConnection();
@@ -1155,7 +1180,8 @@ public class FiqStore {
                       COALESCE((h.file_layout->>'totalBytes')::bigint, 0) total_bytes,
                       COALESCE(h.debt_score, 0) debt_score,
                       COALESCE(h.completeness, 'STALE') health_completeness,
-                      COALESCE((SELECT MAX(i.severity) FROM health_issues i WHERE i.assessment_id=h.id), 'HEALTHY') severity
+                      COALESCE((SELECT i.severity FROM health_issues i WHERE i.assessment_id=h.id
+                        ORDER BY i.severity_rank DESC LIMIT 1), 'HEALTHY') severity
                     FROM delta_tables t
                     LEFT JOIN LATERAL (SELECT * FROM health_assessments h0 WHERE h0.table_id=t.id
                       ORDER BY assessed_at DESC LIMIT 1) h ON true

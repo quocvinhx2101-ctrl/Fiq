@@ -132,7 +132,7 @@ public final class MaintenancePlanner {
 
     private static String commandPreview(
             TableIdentifier table, OperationType type, MaintenancePolicy.OperationConfig config) {
-        var identifier = quoteQualifiedName(table);
+        var identifier = ExecutionTargetRenderer.sql(table.executionTarget());
         var predicate = config.predicate().isBlank() ? "" : " WHERE " + config.predicate();
         return switch (type) {
             case OPTIMIZE_BINPACK, OPTIMIZE_CLUSTERING -> "OPTIMIZE " + identifier + predicate;
@@ -161,14 +161,6 @@ public final class MaintenancePlanner {
                             + " HOURS USING INVENTORY "
                             + config.inventoryTable();
         };
-    }
-
-    private static String quoteQualifiedName(TableIdentifier table) {
-        var parts = new ArrayList<String>();
-        parts.add(table.catalog());
-        parts.addAll(table.namespace());
-        parts.add(table.name());
-        return String.join(".", parts.stream().map(MaintenancePlanner::quote).toList());
     }
 
     private static String quote(String value) {

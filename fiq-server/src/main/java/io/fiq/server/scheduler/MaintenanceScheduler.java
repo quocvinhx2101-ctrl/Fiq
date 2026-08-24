@@ -84,7 +84,7 @@ public class MaintenanceScheduler {
                     new SparkMaintenanceRequest(
                             operation.id(),
                             operation.operationType(),
-                            operation.tableName(),
+                            operation.executionTarget(),
                             operation.basedOnVersion(),
                             config.retentionHours(),
                             config.zOrderColumns(),

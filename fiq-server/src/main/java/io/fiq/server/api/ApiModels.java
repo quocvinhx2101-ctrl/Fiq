@@ -1,5 +1,6 @@
 package io.fiq.server.api;
 
+import io.fiq.domain.ExecutionTarget;
 import io.fiq.domain.HealthCompleteness;
 import io.fiq.domain.MaintenancePolicy;
 import io.fiq.domain.OperationState;
@@ -137,6 +138,7 @@ public final class ApiModels {
             UUID workspaceId,
             UUID tableId,
             String tableName,
+            ExecutionTarget executionTarget,
             UUID policyId,
             OperationType operationType,
             OperationState state,

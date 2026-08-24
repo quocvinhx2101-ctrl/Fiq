@@ -123,7 +123,18 @@ public final class LivyExecutionClient implements SparkExecutionClient {
         var args = new ArrayList<String>();
         add(args, "--operation-id", request.operationId().toString());
         add(args, "--operation", request.operationType().name());
-        add(args, "--table", request.qualifiedTable());
+        switch (request.executionTarget()) {
+            case io.fiq.domain.PathTarget path -> {
+                add(args, "--target-type", "PATH");
+                add(args, "--path", path.uri().toString());
+            }
+            case io.fiq.domain.CatalogTarget catalog -> {
+                add(args, "--target-type", "CATALOG");
+                add(args, "--catalog", catalog.catalog());
+                add(args, "--namespace", String.join(".", catalog.namespace()));
+                add(args, "--table", catalog.table());
+            }
+        }
         add(args, "--expected-version", String.valueOf(request.expectedVersion()));
         add(args, "--retention-hours", String.valueOf(request.retentionHours()));
         if (!request.zOrderColumns().isEmpty()) {

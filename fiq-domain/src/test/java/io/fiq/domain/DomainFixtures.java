@@ -20,7 +20,7 @@ final class DomainFixtures {
                     "main",
                     List.of("analytics"),
                     "events",
-                    Optional.of("s3://lake/analytics/events"));
+                    PathTarget.of("s3://lake/analytics/events"));
 
     static DeltaTableSnapshot snapshot(Set<String> features, List<String> clusteringColumns) {
         return new DeltaTableSnapshot(

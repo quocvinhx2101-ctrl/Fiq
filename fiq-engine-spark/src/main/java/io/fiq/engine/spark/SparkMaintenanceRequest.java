@@ -1,5 +1,6 @@
 package io.fiq.engine.spark;
 
+import io.fiq.domain.ExecutionTarget;
 import io.fiq.domain.OperationType;
 import java.util.List;
 import java.util.Map;
@@ -9,7 +10,7 @@ import java.util.UUID;
 public record SparkMaintenanceRequest(
         UUID operationId,
         OperationType operationType,
-        String qualifiedTable,
+        ExecutionTarget executionTarget,
         long expectedVersion,
         long retentionHours,
         List<String> zOrderColumns,
@@ -19,7 +20,7 @@ public record SparkMaintenanceRequest(
     public SparkMaintenanceRequest {
         operationId = Objects.requireNonNull(operationId, "operationId");
         operationType = Objects.requireNonNull(operationType, "operationType");
-        qualifiedTable = requireSafeQualifiedName(qualifiedTable);
+        executionTarget = Objects.requireNonNull(executionTarget, "executionTarget");
         zOrderColumns = List.copyOf(zOrderColumns == null ? List.of() : zOrderColumns);
         zOrderColumns.forEach(SparkMaintenanceRequest::requireSafeIdentifier);
         predicate = Objects.requireNonNullElse(predicate, "");
@@ -28,13 +29,6 @@ public record SparkMaintenanceRequest(
         if (retentionHours < 0) throw new IllegalArgumentException("retentionHours must be >= 0");
         rejectSqlControlCharacters(predicate, "predicate");
         rejectSqlControlCharacters(inventoryTable, "inventoryTable");
-    }
-
-    private static String requireSafeQualifiedName(String value) {
-        if (value == null || value.isBlank())
-            throw new IllegalArgumentException("qualifiedTable is required");
-        for (var part : value.split("\\.")) requireSafeIdentifier(part);
-        return value;
     }
 
     private static void requireSafeIdentifier(String value) {

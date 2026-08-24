@@ -11,8 +11,7 @@ object MaintenanceJob {
   def main(args: Array[String]): Unit = {
     val options = parseArgs(args)
     val operation = required(options, "operation")
-    val rawTable = required(options, "table")
-    val table = quoteQualified(rawTable)
+    val target = resolveTarget(options)
     val expectedVersion = required(options, "expected-version").toLong
     val retentionHours = options.getOrElse("retention-hours", "168").toLong
     val predicate = options.getOrElse("predicate", "")
@@ -20,16 +19,16 @@ object MaintenanceJob {
 
     val spark = SparkSession.builder().appName(s"FIQ ${required(options, "operation-id")}").getOrCreate()
     try {
-      val deltaTable = DeltaTable.forName(spark, rawTable)
+      val deltaTable = target.deltaTable(spark)
       val actualVersion = deltaTable.history(1).select("version").head().getLong(0)
       if (actualVersion != expectedVersion) {
         throw new IllegalStateException(
           s"FIQ_STALE_PLAN: expected Delta version $expectedVersion but found $actualVersion")
       }
 
-      val result = execute(spark, operation, table, predicate, retentionHours, options)
+      val result = execute(spark, operation, target.sql, predicate, retentionHours, options)
       val evidence = result.collect().map(_.mkString("[", ",", "]")).mkString("[", ",", "]")
-      println(s"FIQ_EVIDENCE operation=$operation table=$rawTable result=$evidence")
+      println(s"FIQ_EVIDENCE operation=$operation target=${target.display} result=$evidence")
     } finally {
       spark.stop()
     }
@@ -74,8 +73,38 @@ object MaintenanceJob {
     spark.sql(base)
   }
 
-  private def quoteQualified(value: String): String =
-    value.split("\\.").map(quoteIdentifier).mkString(".")
+  private sealed trait ResolvedTarget {
+    def sql: String
+    def display: String
+    def deltaTable(spark: SparkSession): DeltaTable
+  }
+
+  private case class PathResolved(path: String) extends ResolvedTarget {
+    rejectSqlControlCharacters(path)
+    override val sql: String = s"delta.`${path.replace("`", "``")}`"
+    override val display: String = path
+    override def deltaTable(spark: SparkSession): DeltaTable = DeltaTable.forPath(spark, path)
+  }
+
+  private case class CatalogResolved(catalog: String, namespace: Seq[String], table: String)
+      extends ResolvedTarget {
+    private val parts = catalog +: namespace :+ table
+    parts.foreach(quoteIdentifier)
+    override val sql: String = parts.map(quoteIdentifier).mkString(".")
+    override val display: String = parts.mkString(".")
+    override def deltaTable(spark: SparkSession): DeltaTable = DeltaTable.forName(spark, display)
+  }
+
+  private def resolveTarget(options: Map[String, String]): ResolvedTarget =
+    required(options, "target-type") match {
+      case "PATH" => PathResolved(required(options, "path"))
+      case "CATALOG" =>
+        CatalogResolved(
+          required(options, "catalog"),
+          required(options, "namespace").split("\\.").toSeq,
+          required(options, "table"))
+      case other => throw new IllegalArgumentException(s"Unsupported execution target: $other")
+    }
 
   private def quoteIdentifier(value: String): String = value match {
     case safeIdentifier() => s"`$value`"

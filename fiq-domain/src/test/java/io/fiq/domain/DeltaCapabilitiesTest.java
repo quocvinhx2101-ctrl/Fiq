@@ -21,14 +21,17 @@ class DeltaCapabilitiesTest {
     }
 
     @Test
-    void zOrderIsRejectedForLiquidClustering() {
+    void onlyBinPackAndVacuumFullAreMutationQualifiedInPhaseOne() {
         var result =
                 capabilities.evaluate(
                         DomainFixtures.snapshot(Set.of("clustering"), List.of("customer_id")));
 
         assertThat(result.get(OperationType.OPTIMIZE_ZORDER).supported()).isFalse();
-        assertThat(result.get(OperationType.OPTIMIZE_CLUSTERING).supported()).isTrue();
-        assertThat(result.get(OperationType.OPTIMIZE_FULL).approvalRequired()).isTrue();
+        assertThat(result.get(OperationType.OPTIMIZE_CLUSTERING).supported()).isFalse();
+        assertThat(result.get(OperationType.OPTIMIZE_FULL).supported()).isFalse();
+        assertThat(result.get(OperationType.VACUUM_LITE).supported()).isFalse();
+        assertThat(result.get(OperationType.OPTIMIZE_BINPACK).supported()).isTrue();
+        assertThat(result.get(OperationType.VACUUM_FULL).supported()).isTrue();
     }
 
     @Test
