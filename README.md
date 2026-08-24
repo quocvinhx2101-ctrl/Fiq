@@ -41,3 +41,15 @@ See `docs/architecture.md`, `docs/operator-guide.md`, `docs/admin-guide.md`,
 qualification boundary.
 
 Development changes follow the sustainable Git workflow in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Acknowledgements
+
+FIQ is an independent project inspired by [Floe](https://github.com/nssalian/floe), created by
+[nssalian](https://github.com/nssalian). Floe's approach to table-maintenance control planes
+provided important ideas and a practical foundation for FIQ's Delta Lake–focused design. We are
+grateful to its author and contributors for making their work available to the open-source
+community.
+
+Where FIQ adapts material from Floe, that work remains acknowledged under the Apache License 2.0.
+See [`NOTICE`](NOTICE) and [`LICENSE`](LICENSE) for attribution and licensing details. FIQ is not
+affiliated with or endorsed by the Floe project.
