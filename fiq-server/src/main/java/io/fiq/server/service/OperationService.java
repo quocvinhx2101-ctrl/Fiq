@@ -25,8 +25,11 @@ public class OperationService {
 
     public ApiModels.OperationView plan(UUID workspaceId, ApiModels.PlanRequest request) {
         access.require(Role.OPERATOR);
+        // Planning always observes current facts; policies never influence what assessment
+        // measures.
+        health.refresh(workspaceId, request.tableId());
         var snapshot = store.loadSnapshot(workspaceId, request.tableId());
-        var health = store.loadHealth(workspaceId, request.tableId(), snapshot.table());
+        var assessment = store.loadHealth(workspaceId, request.tableId(), snapshot.table());
         var policy = store.loadPolicy(workspaceId, request.policyId());
         if (!policy.selector()
                 .matches(snapshot.table(), store.loadTableTags(workspaceId, request.tableId()))) {
@@ -35,7 +38,7 @@ public class OperationService {
                     "FIQ_POLICY_SELECTOR_MISMATCH",
                     "The policy selector does not match this table");
         }
-        var plan = planner.plan(snapshot, health, policy, request.operationType());
+        var plan = planner.plan(snapshot, assessment, policy, request.operationType());
         var saved =
                 store.savePlan(
                         workspaceId,

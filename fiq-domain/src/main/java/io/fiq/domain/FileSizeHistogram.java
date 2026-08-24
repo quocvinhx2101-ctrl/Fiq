@@ -33,6 +33,23 @@ public record FileSizeHistogram(
         return overflowCount + bucketCounts.stream().mapToLong(Long::longValue).sum();
     }
 
+    public ByteEstimate estimateBytesBelow(long thresholdBytes) {
+        validateThreshold(thresholdBytes);
+        var exclusiveBucket = Math.toIntExact(thresholdBytes / bucketWidthBytes);
+        long value = 0;
+        long error = 0;
+        for (var index = 0; index < exclusiveBucket; index++) {
+            var count = bucketCounts.get(index);
+            value =
+                    Math.addExact(
+                            value,
+                            Math.multiplyExact(
+                                    count, index * bucketWidthBytes + bucketWidthBytes / 2));
+            error = Math.addExact(error, Math.multiplyExact(count, bucketWidthBytes / 2));
+        }
+        return new ByteEstimate(value, error, "FIXED_1_MIB_HISTOGRAM_MIDPOINT");
+    }
+
     public static void validateThreshold(long thresholdBytes) {
         if (thresholdBytes < MIB
                 || thresholdBytes > MIB * BUCKET_COUNT
@@ -41,4 +58,6 @@ public record FileSizeHistogram(
                     "small-file threshold must be a whole MiB between 1 MiB and 1 GiB");
         }
     }
+
+    public record ByteEstimate(long valueBytes, long errorBoundBytes, String method) {}
 }

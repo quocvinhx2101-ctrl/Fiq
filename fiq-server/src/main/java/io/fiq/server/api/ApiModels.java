@@ -151,6 +151,7 @@ public final class ApiModels {
             String commandPreview,
             List<String> reasons,
             List<String> warnings,
+            Map<String, Object> policyEvaluation,
             Map<String, Object> result,
             String errorCode,
             String errorMessage,

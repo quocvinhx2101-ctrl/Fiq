@@ -16,6 +16,7 @@ public record OperationPlan(
         boolean approvalRequired,
         List<String> reasons,
         List<String> warnings,
+        PolicyEvaluation evaluation,
         String commandPreview) {
     public OperationPlan {
         id = Objects.requireNonNull(id, "id");
@@ -24,6 +25,7 @@ public record OperationPlan(
         createdAt = Objects.requireNonNull(createdAt, "createdAt");
         reasons = List.copyOf(reasons);
         warnings = List.copyOf(warnings);
+        evaluation = Objects.requireNonNull(evaluation, "evaluation");
         commandPreview = Objects.requireNonNullElse(commandPreview, "");
         if (estimatedBytes < 0) throw new IllegalArgumentException("estimatedBytes must be >= 0");
         if (!executable && reasons.isEmpty()) {

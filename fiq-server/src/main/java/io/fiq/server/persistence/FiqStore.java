@@ -121,7 +121,8 @@ public class FiqStore {
         var sql =
                 """
                 SELECT t.*,
-                       COALESCE((h.file_layout->>'fileCount')::bigint, 0) file_count,
+                       COALESCE((h.file_layout->>'activeFileCount')::bigint,
+                         (h.file_layout->>'fileCount')::bigint, 0) file_count,
                        COALESCE((h.file_layout->>'totalBytes')::bigint, 0) total_bytes,
                        COALESCE(h.debt_score, 0) debt_score,
                        COALESCE(h.completeness, 'STALE') health_completeness,
@@ -693,33 +694,71 @@ public class FiqStore {
             OperationPlan plan,
             String idempotencyKey) {
         var initialState =
-                plan.approvalRequired() ? OperationState.AWAITING_APPROVAL : OperationState.PLANNED;
+                plan.executable() && plan.approvalRequired()
+                        ? OperationState.AWAITING_APPROVAL
+                        : OperationState.PLANNED;
         var sql =
                 """
                 INSERT INTO operation_runs(
                   id, workspace_id, table_id, policy_id, operation_type, state,
                   based_on_version, estimated_bytes, command_preview, reasons, warnings,
-                  approval_required, idempotency_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?)
+                  approval_required, idempotency_key, execution_target_snapshot,
+                  planning_evidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?::jsonb, ?::jsonb)
                 ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
                 """;
-        execute(
-                sql,
-                statement -> {
-                    statement.setObject(1, plan.id());
-                    statement.setObject(2, workspaceId);
-                    statement.setObject(3, tableId);
-                    statement.setObject(4, policyId);
-                    statement.setString(5, plan.operationType().name());
-                    statement.setString(6, initialState.name());
-                    statement.setLong(7, plan.basedOnVersion());
-                    statement.setLong(8, plan.estimatedBytes());
-                    statement.setString(9, plan.commandPreview());
-                    statement.setString(10, json(plan.reasons()));
-                    statement.setString(11, json(plan.warnings()));
-                    statement.setBoolean(12, plan.approvalRequired());
-                    statement.setString(13, idempotencyKey);
-                });
+        var inserted =
+                execute(
+                        sql,
+                        statement -> {
+                            statement.setObject(1, plan.id());
+                            statement.setObject(2, workspaceId);
+                            statement.setObject(3, tableId);
+                            statement.setObject(4, policyId);
+                            statement.setString(5, plan.operationType().name());
+                            statement.setString(6, initialState.name());
+                            statement.setLong(7, plan.basedOnVersion());
+                            statement.setLong(8, plan.estimatedBytes());
+                            statement.setString(9, plan.commandPreview());
+                            statement.setString(10, json(plan.reasons()));
+                            statement.setString(11, json(plan.warnings()));
+                            statement.setBoolean(12, plan.approvalRequired());
+                            statement.setString(13, idempotencyKey);
+                            statement.setString(14, json(plan.table().executionTarget()));
+                            statement.setString(15, json(plan.evaluation()));
+                        });
+        if (inserted == 1) {
+            execute(
+                    """
+                    INSERT INTO policy_evaluations(workspace_id, policy_id, table_id,
+                      assessment_id, operation_id, operation_type, decision, observations,
+                      policy_thresholds, conditions, blockers, evaluated_at)
+                    SELECT ?, ?, ?, h.id, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?
+                    FROM health_assessments h
+                    WHERE h.workspace_id=? AND h.table_id=? AND h.observed_version=?
+                    ORDER BY h.assessed_at DESC LIMIT 1
+                    """,
+                    statement -> {
+                        var evaluation = plan.evaluation();
+                        statement.setObject(1, workspaceId);
+                        statement.setObject(2, policyId);
+                        statement.setObject(3, tableId);
+                        statement.setObject(4, plan.id());
+                        statement.setString(5, plan.operationType().name());
+                        statement.setString(6, evaluation.decision().name());
+                        statement.setString(7, json(evaluation.observations()));
+                        statement.setString(8, json(evaluation.policyThresholds()));
+                        statement.setString(9, json(evaluation.conditions()));
+                        statement.setString(10, json(evaluation.blockers()));
+                        statement.setObject(
+                                11,
+                                java.time.OffsetDateTime.ofInstant(
+                                        evaluation.evaluatedAt(), java.time.ZoneOffset.UTC));
+                        statement.setObject(12, workspaceId);
+                        statement.setObject(13, tableId);
+                        statement.setLong(14, plan.basedOnVersion());
+                    });
+        }
         return operationByIdempotencyKey(workspaceId, idempotencyKey);
     }
 
@@ -1396,7 +1435,8 @@ public class FiqStore {
         return """
                 SELECT o.*, t.qualified_name table_qualified_name,
                   t.execution_target_type table_target_type,
-                  t.execution_target table_execution_target
+                  t.execution_target table_execution_target,
+                  o.planning_evidence policy_evaluation
                 FROM operation_runs o JOIN delta_tables t ON t.id=o.table_id
                 """;
     }
@@ -1419,6 +1459,7 @@ public class FiqStore {
                 result.getString("command_preview"),
                 readStringList(result.getString("reasons")),
                 readStringList(result.getString("warnings")),
+                readObjectMap(result.getString("policy_evaluation")),
                 readObjectMap(result.getString("result")),
                 result.getString("error_code"),
                 result.getString("error_message"),
@@ -1509,7 +1550,8 @@ public class FiqStore {
                     connection.prepareStatement(
                             """
                     SELECT t.*,
-                      COALESCE((h.file_layout->>'fileCount')::bigint, 0) file_count,
+                      COALESCE((h.file_layout->>'activeFileCount')::bigint,
+                        (h.file_layout->>'fileCount')::bigint, 0) file_count,
                       COALESCE((h.file_layout->>'totalBytes')::bigint, 0) total_bytes,
                       COALESCE(h.debt_score, 0) debt_score,
                       COALESCE(h.completeness, 'STALE') health_completeness,
