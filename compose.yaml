@@ -28,6 +28,49 @@ services:
       retries: 20
     volumes: ["fiq-minio:/data"]
 
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-07-21T05-28-08Z
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set fiq http://minio:9000 fiq fiq-development-only &&
+        mc mb --ignore-existing fiq/fiq-samples &&
+        mc mb --ignore-existing fiq/fiq-system
+
+  hms-postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive-development-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes: ["fiq-hms-postgres:/var/lib/postgresql/data"]
+
+  hms:
+    build: docker/hms
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hms-postgres:5432/metastore
+        -Djavax.jdo.option.ConnectionUserName=hive
+        -Djavax.jdo.option.ConnectionPassword=hive-development-only
+    ports: ["9083:9083"]
+    depends_on:
+      hms-postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
   livy:
     build: docker/livy
     ports: ["8998:8998"]
@@ -41,6 +84,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+    depends_on:
+      minio-init: { condition: service_completed_successfully }
+      hms: { condition: service_healthy }
+
+  sample-init:
+    build: docker/livy
+    environment:
+      AWS_ACCESS_KEY_ID: fiq
+      AWS_SECRET_ACCESS_KEY: fiq-development-only
+    volumes:
+      - ./fiq-spark-job/build/libs/fiq-spark-job-0.1.0-SNAPSHOT-all.jar:/opt/fiq/fiq-spark-job.jar:ro
+    command:
+      - /opt/spark/bin/spark-submit
+      - --class
+      - io.fiq.spark.SampleDataJob
+      - /opt/fiq/fiq-spark-job.jar
+      - --root
+      - s3a://fiq-samples
+    depends_on:
+      minio-init: { condition: service_completed_successfully }
+      hms: { condition: service_healthy }
 
   server:
     build: .
@@ -53,11 +117,17 @@ services:
       FIQ_COOKIE_SECURE: "false"
       FIQ_LIVY_URL: http://livy:8998
       FIQ_LIVY_JOB_JAR: local:///opt/fiq/fiq-spark-job.jar
+      AWS_ACCESS_KEY_ID: fiq
+      AWS_SECRET_ACCESS_KEY: fiq-development-only
+      FIQ_SAMPLE_ENABLED: "true"
+      FIQ_S3_ENDPOINT: http://minio:9000
     ports: ["9091:9091"]
     depends_on:
       postgres: { condition: service_healthy }
       livy: { condition: service_healthy }
+      sample-init: { condition: service_completed_successfully }
 
 volumes:
   fiq-postgres:
   fiq-minio:
+  fiq-hms-postgres:
