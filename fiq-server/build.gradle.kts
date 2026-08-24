@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":fiq-engine-spark"))
     implementation(libs.hadoop.common)
     runtimeOnly(libs.hadoop.aws)
+    implementation(libs.cron.utils)
 
     implementation("io.quarkus:quarkus-rest-jackson")
     implementation("io.quarkus:quarkus-rest")

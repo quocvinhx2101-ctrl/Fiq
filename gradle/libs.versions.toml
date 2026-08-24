@@ -3,6 +3,7 @@ quarkus = "3.33.3.1"
 delta = "4.0.1"
 spark = "4.0.1"
 hadoop = "3.4.2"
+cronutils = "9.2.1"
 scala = "2.13.16"
 jackson = "2.20.0"
 httpclient = "5.5"
@@ -17,6 +18,7 @@ delta-spark = { module = "io.delta:delta-spark_2.13", version.ref = "delta" }
 spark-sql = { module = "org.apache.spark:spark-sql_2.13", version.ref = "spark" }
 hadoop-common = { module = "org.apache.hadoop:hadoop-common", version.ref = "hadoop" }
 hadoop-aws = { module = "org.apache.hadoop:hadoop-aws", version.ref = "hadoop" }
+cron-utils = { module = "com.cronutils:cron-utils", version.ref = "cronutils" }
 scala-library = { module = "org.scala-lang:scala-library", version.ref = "scala" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310", version.ref = "jackson" }

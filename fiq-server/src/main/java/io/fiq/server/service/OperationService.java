@@ -37,9 +37,34 @@ public class OperationService {
 
     public ApiModels.OperationView plan(UUID workspaceId, ApiModels.PlanRequest request) {
         access.require(Role.OPERATOR);
+        return planInternal(workspaceId, request, access.principal());
+    }
+
+    public ApiModels.OperationView schedule(UUID workspaceId, ApiModels.PlanRequest request) {
+        var operation = planInternal(workspaceId, request, "fiq-policy-scheduler");
+        if (!operation.reasons().isEmpty() && operation.state() == OperationState.PLANNED) {
+            return store.transition(
+                    workspaceId,
+                    operation.id(),
+                    OperationState.PLANNED,
+                    OperationState.SKIPPED,
+                    null,
+                    "FIQ_POLICY_NOT_ELIGIBLE",
+                    String.join("; ", operation.reasons()));
+        }
+        if (operation.state() == OperationState.PLANNED)
+            return queueInternal(workspaceId, operation);
+        return operation;
+    }
+
+    private ApiModels.OperationView planInternal(
+            UUID workspaceId, ApiModels.PlanRequest request, String principal) {
+        var existing = store.findOperationByIdempotencyKey(workspaceId, request.idempotencyKey());
+        if (existing.isPresent()) return existing.get();
         // Planning always observes current facts; policies never influence what assessment
         // measures.
-        health.refresh(workspaceId, request.tableId());
+        if (principal.startsWith("fiq-")) health.refreshSystem(workspaceId, request.tableId());
+        else health.refresh(workspaceId, request.tableId());
         var snapshot = store.loadSnapshot(workspaceId, request.tableId());
         var assessment = store.loadHealth(workspaceId, request.tableId(), snapshot.table());
         var policy = store.loadPolicy(workspaceId, request.policyId());
@@ -66,7 +91,7 @@ public class OperationService {
                         request.policyId(),
                         plan,
                         request.idempotencyKey());
-        if (request.operationType() == OperationType.VACUUM_FULL) {
+        if (request.operationType() == OperationType.VACUUM_FULL && saved.id().equals(plan.id())) {
             store.attachPreflight(
                     workspaceId,
                     saved.id(),
@@ -78,7 +103,7 @@ public class OperationService {
                 workspaceId,
                 "OPERATION_PLANNED",
                 plan.executable() ? "INFO" : "WARN",
-                access.principal(),
+                principal,
                 "operation",
                 saved.id().toString(),
                 Map.of(
@@ -188,6 +213,11 @@ public class OperationService {
     public ApiModels.OperationView queue(UUID workspaceId, UUID operationId) {
         access.require(Role.OPERATOR);
         var operation = store.operation(workspaceId, operationId);
+        return queueInternal(workspaceId, operation);
+    }
+
+    private ApiModels.OperationView queueInternal(
+            UUID workspaceId, ApiModels.OperationView operation) {
         if (!operation.reasons().isEmpty()) {
             throw new ApiException(
                     422,
@@ -204,7 +234,7 @@ public class OperationService {
         var queued =
                 store.transition(
                         workspaceId,
-                        operationId,
+                        operation.id(),
                         OperationState.PLANNED,
                         OperationState.QUEUED,
                         null,

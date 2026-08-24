@@ -675,6 +675,105 @@ public class FiqStore {
                 .toList();
     }
 
+    public List<PolicyReference> enabledPolicyReferences() {
+        return queryList(
+                "SELECT workspace_id, id FROM policies WHERE enabled=true ORDER BY workspace_id, id",
+                statement -> {},
+                result ->
+                        new PolicyReference(
+                                result.getObject("workspace_id", UUID.class),
+                                result.getObject("id", UUID.class)));
+    }
+
+    public List<UUID> matchingActiveTables(UUID workspaceId, MaintenancePolicy policy) {
+        return queryList(
+                        """
+                        SELECT id FROM delta_tables
+                        WHERE workspace_id=? AND discovery_status='ACTIVE'
+                        ORDER BY id
+                        """,
+                        statement -> statement.setObject(1, workspaceId),
+                        result -> result.getObject("id", UUID.class))
+                .stream()
+                .filter(
+                        tableId ->
+                                policy.selector()
+                                        .matches(
+                                                loadSnapshot(workspaceId, tableId).table(),
+                                                loadTableTags(workspaceId, tableId)))
+                .toList();
+    }
+
+    public long activePolicyOperationCount(UUID workspaceId, UUID policyId) {
+        return queryOne(
+                """
+                SELECT COUNT(*) count FROM operation_runs
+                WHERE workspace_id=? AND policy_id=?
+                  AND state IN ('QUEUED','RUNNING','CANCELLING')
+                """,
+                statement -> {
+                    statement.setObject(1, workspaceId);
+                    statement.setObject(2, policyId);
+                },
+                result -> result.getLong("count"),
+                "FIQ_POLICY_NOT_FOUND",
+                "Policy was not found");
+    }
+
+    public boolean claimPolicyFire(
+            UUID policyId,
+            UUID tableId,
+            OperationType operation,
+            Instant scheduledTimeUtc,
+            String fireKey,
+            String owner,
+            int leaseSeconds) {
+        var sql =
+                """
+                INSERT INTO policy_schedule_state(policy_id, table_id, operation_type,
+                  scheduled_time_utc, fire_key, state, claim_owner, claim_expires_at)
+                VALUES (?, ?, ?, ?, ?, 'CLAIMED', ?, NOW() + (? * INTERVAL '1 second'))
+                ON CONFLICT (fire_key) DO UPDATE SET state='CLAIMED', claim_owner=EXCLUDED.claim_owner,
+                  claim_expires_at=EXCLUDED.claim_expires_at, updated_at=NOW(), error_message=NULL
+                WHERE policy_schedule_state.state='CLAIMED'
+                  AND policy_schedule_state.claim_expires_at < NOW()
+                RETURNING fire_key
+                """;
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, policyId);
+            statement.setObject(2, tableId);
+            statement.setString(3, operation.name());
+            statement.setObject(
+                    4,
+                    java.time.OffsetDateTime.ofInstant(scheduledTimeUtc, java.time.ZoneOffset.UTC));
+            statement.setString(5, fireKey);
+            statement.setString(6, owner);
+            statement.setInt(7, leaseSeconds);
+            try (var result = statement.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException exception) {
+            throw persistenceFailure(exception);
+        }
+    }
+
+    public void completePolicyFire(
+            String fireKey, String state, UUID operationId, String errorMessage) {
+        execute(
+                """
+                UPDATE policy_schedule_state SET state=?, operation_id=?, error_message=?,
+                  claim_owner=NULL, claim_expires_at=NULL, updated_at=NOW()
+                WHERE fire_key=? AND state='CLAIMED'
+                """,
+                statement -> {
+                    statement.setString(1, state);
+                    statement.setObject(2, operationId);
+                    statement.setString(3, errorMessage);
+                    statement.setString(4, fireKey);
+                });
+    }
+
     private void bindPolicy(
             PreparedStatement statement,
             int offset,
@@ -809,6 +908,19 @@ public class FiqStore {
                     statement.setObject(1, workspaceId);
                     statement.setObject(2, operationId);
                 });
+    }
+
+    public Optional<ApiModels.OperationView> findOperationByIdempotencyKey(
+            UUID workspaceId, String key) {
+        return queryList(
+                        operationSelect() + " WHERE o.workspace_id=? AND o.idempotency_key=?",
+                        statement -> {
+                            statement.setObject(1, workspaceId);
+                            statement.setString(2, key);
+                        },
+                        this::operationView)
+                .stream()
+                .findFirst();
     }
 
     public void attachPreflight(
@@ -1996,4 +2108,6 @@ public class FiqStore {
             connection.close();
         }
     }
+
+    public record PolicyReference(UUID workspaceId, UUID policyId) {}
 }
