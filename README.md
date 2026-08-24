@@ -19,6 +19,22 @@ The only Phase 1 mutation-qualified runtime is Spark 4.0.1 + Delta Lake 4.0.1. P
 supported sources. FIQ never edits `_delta_log`; PATH mutation uses `DeltaTable.forPath`, while
 HMS mutation uses `DeltaTable.forName`, with no fallback between them.
 
+## Deployment boundary
+
+FIQ itself consists of only the FIQ server/UI and PostgreSQL. Delta Kernel is embedded in the
+server; it is a library, not another service. Storage, catalog, and execution infrastructure are
+integrations supplied by the user's platform.
+
+```text
+FIQ runtime                  External integrations
+┌──────────────────┐        ┌──────────────────────────────┐
+│ FIQ server + UI  │───────►│ Object storage              │
+│ Delta Kernel     │        │ Hive Metastore              │
+│ PostgreSQL       │        │ Spark 4.0.1 + Delta 4.0.1   │
+└──────────────────┘        │ Livy execution endpoint     │
+                            └──────────────────────────────┘
+```
+
 ## Modules
 
 - `fiq-domain` — policy, health, capability, operation, and security model
@@ -28,18 +44,30 @@ HMS mutation uses `DeltaTable.forName`, with no fallback between them.
 - `fiq-server` — REST API, scheduler, persistence, authentication, and SPA hosting
 - `fiq-ui` — React production interface
 
-## Run the complete local sample
+## Run FIQ
 
 ```bash
-./gradlew :fiq-spark-job:shadowJar
-docker compose up --build
+make up
 ```
 
-Leave Compose running and open <http://localhost:9091>. It starts PostgreSQL, MinIO, Hive
-Metastore, Spark/Delta through Livy, FIQ, and idempotent sample generation. FIQ then creates the
-sample PATH/HMS connections and discovers the fixtures automatically—no SQL or setup curl is
-required. Run in the background with `docker compose up --build -d`; stop with
-`docker compose down`.
+This starts only `fiq-server` and PostgreSQL. Open <http://localhost:9091>; the empty Connections
+screen is the expected initial state. Add a PATH or HMS connection for the storage, catalog, and
+Spark/Livy already operated by your platform. FIQ does not contact those systems until a
+connection is tested, discovery runs, an assessment needs it, or an operation executes.
+
+Use `make ps`, `make logs`, and `make down` to inspect or stop this minimal runtime.
+
+## Run the local demo
+
+```bash
+make demo-up
+```
+
+The demo overlay adds MinIO, Hive Metastore, HMS PostgreSQL, Spark/Delta through Livy, and
+idempotent sample generation. These services are evaluation infrastructure, **not FIQ runtime
+dependencies**. The demo automatically creates PATH/HMS connections and discovers its fixtures.
+Open <http://localhost:9091> after `make demo-ps` shows `server` running and `sample-init` exited
+successfully.
 
 In the UI:
 
@@ -52,7 +80,7 @@ In the UI:
 To exercise both PATH/HMS OPTIMIZE and isolated sample VACUUM FULL from the API:
 
 ```bash
-./scripts/acceptance-core.sh
+make demo-test
 ```
 
 The script requires `curl` and `jq`. Zero-hour retention is enabled only for the isolated sample
@@ -61,14 +89,11 @@ VACUUM fixture and still requires approval; it is never a global setting.
 ## Development checks
 
 ```bash
-./gradlew ci
-cd fiq-ui
-npm ci
-npm run typecheck
-npm test
-npm run test:e2e
-npm run build
+make build
+make test
 ```
+
+Run `make help` for all build, runtime, demo, log, restart, and scoped cleanup commands.
 
 ## Qualification boundary
 

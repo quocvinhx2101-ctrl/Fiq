@@ -1,18 +1,32 @@
 # Operator guide
 
-## Local stack
+## Minimal FIQ runtime
 
-Requirements are Java 21, Docker with Compose, and Node 24. Build the Spark artifact first because
-the Livy container mounts it read-only:
+FIQ has one required runtime dependency: PostgreSQL. Start the server, UI, and database with:
 
 ```bash
-./gradlew :fiq-spark-job:shadowJar
-docker compose up --build
+make up
 ```
 
-Open `http://localhost:9091`. Development auth is explicitly disabled by the Compose profile.
-PostgreSQL is on 5432, MinIO on 9000/9001, and Livy on 8998. These credentials are development
-only. Do not reuse the Compose values outside an isolated workstation.
+Open `http://localhost:9091`. An empty connection/table list is healthy. The server does not need
+MinIO, HMS, Livy, or sample data to start and does not probe them at startup. Connection records
+carry their own execution endpoint; testing or using a connection is what contacts external
+infrastructure.
+
+Use `make ps`, `make logs`, and `make down`. The minimal Compose file is intentionally limited to
+`postgres` and `server`.
+
+## Self-contained local demo
+
+Requirements are Java 21, Docker with Compose, Node 24, `curl`, and `jq`. Start the demo with:
+
+```bash
+make demo-up
+```
+
+This uses `compose.yaml + compose.demo.yaml`. Development auth is disabled. PostgreSQL is on
+5432, MinIO on 9000/9001, HMS on 9083, Livy on 8998, and FIQ on 9091. These credentials are
+development only. Do not reuse them outside an isolated workstation.
 
 The sample initializer creates PATH small files, an HMS small-file table, deletion-vector and
 history/checkpoint fixtures, and an isolated VACUUM fixture. The server automatically registers
@@ -24,20 +38,21 @@ Hive client artifacts into the `fiq-ivy` volume. Keep that volume for normal res
 starts reuse it. Wait for `sample-init` to exit successfully and `server` to start:
 
 ```bash
-docker compose ps -a
-docker compose logs -f sample-init server
+make demo-ps
+make demo-logs
 ```
 
 To keep the stack running after closing the terminal:
 
 ```bash
-docker compose up --build -d
-docker compose ps
-docker compose logs -f server
+make demo-up
+make demo-ps
+make demo-logs
 ```
 
-`Ctrl+C` only stops log following in the last command. Stop services with `docker compose down`;
-add `--volumes` only when you intentionally want to erase local sample databases and objects.
+`Ctrl+C` only stops log following. `make demo-down` preserves demo state. `make demo-reset`
+deletes only the selected `fiq-demo` Compose project's containers and volumes; it never prunes
+unrelated Docker resources.
 
 ## End-user workflow
 
@@ -53,7 +68,7 @@ add `--volumes` only when you intentionally want to erase local sample databases
 6. **Operations**: queue or approve, then inspect ASSESS, PREFLIGHT, EXECUTION, and VERIFICATION.
    A Spark job alone is not success; verified before/after evidence is required.
 
-Run `./scripts/acceptance-core.sh` after startup for the destructive isolated sample acceptance.
+Run `make demo-test` after startup for the destructive isolated sample acceptance.
 It proves PATH `forPath`, HMS `forName`, measurable OPTIMIZE reduction, and VACUUM FULL
 dry-run/approval/apply/verify. Never point that script at non-sample data.
 
@@ -64,10 +79,12 @@ support from the Livy server version alone.
 
 ## Production configuration
 
-Use external PostgreSQL and Spark/Livy. Set `FIQ_DATABASE_*`, `FIQ_LIVY_URL`, and the OIDC values.
-The OIDC client uses Authorization Code + PKCE and a secure SameSite cookie. Keep
-`FIQ_AUTH_ENABLED=true` and `FIQ_COOKIE_SECURE=true`. Connections store only a secret reference;
-credentials arrive through workload identity, cloud credential chains, or Kubernetes Secrets.
+Use external PostgreSQL and configure Spark/Livy endpoints on each connection. Set
+`FIQ_DATABASE_*` and the OIDC values. Set the optional `FIQ_S3_ENDPOINT` only when embedded Delta
+Kernel or structured-result reads need an S3-compatible endpoint such as MinIO. The OIDC client
+uses Authorization Code + PKCE and a secure SameSite cookie. Keep `FIQ_AUTH_ENABLED=true` and
+`FIQ_COOKIE_SECURE=true`. Connections store only a secret reference; credentials arrive through
+workload identity, cloud credential chains, or Kubernetes Secrets.
 
 Run `/q/health/ready` for readiness, `/q/health/live` for liveness, and scrape `/q/metrics`.
 Back up PostgreSQL with PITR. Restore into a separate instance, run Flyway validation, then admit

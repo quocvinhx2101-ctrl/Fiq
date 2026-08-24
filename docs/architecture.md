@@ -10,6 +10,25 @@ code. All source is under the `io.fiq` package.
 state. PostgreSQL is the source of truth. Claims use `FOR UPDATE SKIP LOCKED`; a partial unique
 index guarantees that only one queued/running/cancelling operation exists for a table.
 
+The deployable FIQ runtime is only `fiq-server + PostgreSQL`. Delta Kernel stays embedded in the
+server. Object storage, HMS, Spark, and Livy are connection-scoped integrations and are not
+startup dependencies. The repository's `compose.demo.yaml` supplies those systems only for a
+self-contained evaluation environment.
+
+```text
+          user-provided platform
+  storage / catalog / Spark / Livy
+                 ▲
+                 │ connection adapters
+        ┌────────┴─────────┐
+        │ FIQ server + UI  │
+        │ embedded Kernel  │
+        │ planner/scheduler│
+        └────────┬─────────┘
+                 │
+            PostgreSQL
+```
+
 Classic PATH tables are read by Delta Kernel in `fiq-delta`; HMS discovery and log/retention
 evidence use the qualified Spark runtime. Mutations are expressed as typed
 `SparkMaintenanceRequest` values and sent by `fiq-engine-spark` to Livy. The Scala 2.13

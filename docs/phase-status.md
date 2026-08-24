@@ -17,6 +17,8 @@
 - Durable cron/window/selector policy scheduler with fire idempotency and concurrency controls.
 - Local PostgreSQL/MinIO/HMS/Livy/Spark sample topology and automatic connection/discovery
   bootstrap with no manual database insertion or setup curl.
+- A minimal product runtime containing only FIQ server/UI and PostgreSQL. MinIO, HMS, Livy/Spark,
+  storage credentials, and sample generation live exclusively in the local demo overlay.
 - Minimal UI controls for connection, discovery, six-dimension health, policy creation, planning,
   approval/execution, and before/after evidence. Playwright covers the core mocked API workflow at
   390/768/1440 plus dark theme.
@@ -30,9 +32,13 @@ The following checks passed on 2026-08-24:
   shadow JAR.
 - UI typecheck, three Vitest cases, production Vite build, and nine Playwright cases across the
   mobile/tablet/desktop projects.
-- `docker compose config --quiet`, `bash -n scripts/acceptance-core.sh`, and `git diff --check`.
-- A clean isolated Compose project with new PostgreSQL, MinIO, HMS, and Ivy volumes started from
-  `docker compose up --build`. Sample generation, connection bootstrap, PATH discovery, and HMS
+- Both minimal and merged demo Compose configurations validate, `bash -n
+  scripts/acceptance-core.sh` passes, and `make help` documents scoped lifecycle commands.
+- A clean minimal Compose project started through `make up` with only PostgreSQL and FIQ. FIQ
+  readiness was `UP`, the UI returned HTTP 200, and empty connection/table lists remained usable
+  without MinIO, HMS, Livy, storage configuration, or sample data.
+- A separate clean demo Compose project with new PostgreSQL, MinIO, HMS, and Ivy volumes started
+  through `make demo-up`. Sample generation, connection bootstrap, PATH discovery, and HMS
   discovery completed without manual database insertion or setup curl.
 - Real PATH OPTIMIZE used a `PathTarget`, advanced Delta version 1 to 2, and reduced active/small
   files from 96 to 1.
